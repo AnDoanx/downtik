@@ -1,138 +1,250 @@
-import os
-import re
 import logging
+import html
 import aiohttp
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-# Cấu hình logging
+# TOKEN ĐÃ ĐƯỢC THAY SẴN
+BOT_TOKEN = "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98"
+TIKWM_BASE = "https://www.tikwm.com/api/"
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
+# --- API TIKWM ---
+async def tikwm_req(endpoint: str = "", params: dict = None):
+    url = f"{TIKWM_BASE}{endpoint}" if endpoint else TIKWM_BASE
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(url, data=params or {}) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                return None
+        except Exception as e:
+            logging.error(f"API Error: {e}")
+            return None
 
-# Các API Endpoint
-COBALT_API_URL = "https://api.cobalt.tools/"
-TIKWM_API_URL = "https://www.tikwm.com/api/"
+# --- MENU CHÍNH ---
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🎬 Tải Video TikTok", callback_data="menu_tiktok")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "🤖 <b>Chào mừng bạn đến với Multi-Tool Bot!</b>\n\n"
+        "Vui lòng chọn chức năng bạn muốn sử dụng bên dưới:"
+    )
+    
+    if update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Chào bạn! Hãy gửi link TikTok, Instagram, Facebook, YouTube... tôi sẽ tải về giúp bạn."
+# --- XỬ LÝ MENU KHỜI ĐỘNG ---
+async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "menu_tiktok":
+        help_text = (
+            "🎬 <b>Chức năng Tải TikTok:</b>\n\n"
+            "• Gửi trực tiếp <b>link TikTok</b> vào chat để tải Video/Slide/Nhạc.\n"
+            "• <code>/trending [VN]</code>: Nguồn cấp xu hướng.\n"
+            "• <code>/search &lt;từ khóa&gt;</code>: Tìm kiếm video.\n"
+            "• <code>/searchuser &lt;tên&gt;</code>: Tìm người dùng.\n"
+            "• <code>/user &lt;unique_id&gt;</code>: Xem profile & video user.\n"
+            "• <code>/hashtag &lt;tên&gt;</code>: Video theo Hashtag."
+        )
+        await query.message.reply_text(help_text, parse_mode="HTML")
+
+# --- TẢI LINK TIKTOK ---
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    if "tiktok.com" not in url:
+        return
+
+    msg = await update.message.reply_text("⏳ Đang xử lý link TikTok...")
+    data = await tikwm_req("", {"url": url, "hd": 1})
+
+    if not data or data.get("code") != 0:
+        await msg.edit_text("❌ Link không hợp lệ hoặc không lấy được dữ liệu.")
+        return
+
+    res = data["data"]
+    title = html.escape(res.get("title", "TikTok Video"))
+    author = html.escape(res.get("author", {}).get("nickname", "N/A"))
+    music_id = res.get("music_info", {}).get("id", "")
+    
+    caption = (
+        f"🎬 <b>{title}</b>\n\n"
+        f"👤 Tác giả: {author}\n"
+        f"❤️ {res.get('digg_count', 0)} | 💬 {res.get('comment_count', 0)} | 🔁 {res.get('share_count', 0)}"
     )
 
-# Hàm dự phòng xử lý TikTok bằng TikWM API
-async def fetch_tikwm(session, url):
-    try:
-        async with session.get(TIKWM_API_URL, params={"url": url}) as resp:
-            if resp.status == 200:
-                res = await resp.json()
-                if res.get("code") == 0:
-                    data = res.get("data", {})
-                    images = data.get("images")
-                    if images:
-                        return {"type": "images", "urls": images}
-                    video = data.get("play")
-                    if video:
-                        return {"type": "video", "url": video, "title": data.get("title", "")}
-    except Exception as e:
-        logging.error(f"TikWM Error: {e}")
-    return None
+    keyboard = []
+    if music_id:
+        keyboard.append([InlineKeyboardButton("🎵 Lấy nhạc & Video theo nhạc", callback_data=f"music_{music_id}")])
+    keyboard.append([InlineKeyboardButton("💬 Xem bình luận", callback_data=f"comments_{res['id']}")])
+    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
-# Hàm xử lý chính qua Cobalt API
-async def fetch_cobalt(session, url):
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
-    payload = {"url": url, "videoQuality": "max"}
     try:
-        async with session.post(COBALT_API_URL, json=payload, headers=headers) as resp:
-            if resp.status == 200:
-                return await resp.json()
+        if "images" in res and res["images"]:
+            await msg.delete()
+            images = res["images"][:10]
+            media = [InputMediaPhoto(media=img_url) for img_url in images]
+            await update.message.reply_media_group(media=media)
+            await update.message.reply_text(caption, parse_mode="HTML", reply_markup=markup)
+        else:
+            video_url = res.get("hdplay") or res.get("play")
+            await msg.delete()
+            await update.message.reply_video(video=video_url, caption=caption, parse_mode="HTML", reply_markup=markup)
     except Exception as e:
-        logging.error(f"Cobalt Error: {e}")
-    return None
+        logging.error(f"Error sending media: {e}")
+        await update.message.reply_text("❌ Không thể tải hoặc gửi file phương tiện.")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
+# --- LỆNH TIKTOK MỞ RỘNG ---
+async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    region = context.args[0] if context.args else "VN"
+    res = await tikwm_req("feed/list", {"region": region, "count": 5})
     
-    if not url.startswith("http://") and not url.startswith("https://"):
+    if res and res.get("code") == 0:
+        await update.message.reply_text(f"🔥 <b>Top Xu Hướng ({html.escape(region)}):</b>", parse_mode="HTML")
+        for vid in res["data"][:3]:
+            caption = f"🎬 {html.escape(vid.get('title', ''))}\n👤 {html.escape(vid['author']['nickname'])}"
+            await update.message.reply_video(video=vid["play"], caption=caption)
+    else:
+        await update.message.reply_text("❌ Không thể lấy nguồn cấp xu hướng.")
+
+async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keywords = " ".join(context.args)
+    if not keywords:
+        await update.message.reply_text("Cú pháp: <code>/search &lt;từ khóa&gt;</code>", parse_mode="HTML")
         return
 
-    status_msg = await update.message.reply_text("⏳ Đang xử lý link, vui lòng chờ...")
+    res = await tikwm_req("feed/search", {"keywords": keywords, "count": 5, "cursor": 0})
+    if res and res.get("code") == 0 and res["data"].get("videos"):
+        await update.message.reply_text(f"🔍 <b>Kết quả tìm kiếm cho:</b> <code>{html.escape(keywords)}</code>", parse_mode="HTML")
+        for vid in res["data"]["videos"][:3]:
+            await update.message.reply_video(video=vid["play"], caption=html.escape(vid.get("title", "")))
+    else:
+        await update.message.reply_text("❌ Không tìm thấy kết quả.")
 
-    async with aiohttp.ClientSession() as session:
-        # 1. Thử gọi Cobalt API trước
-        cobalt_data = await fetch_cobalt(session, url)
+async def cmd_search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyword = " ".join(context.args)
+    if not keyword:
+        await update.message.reply_text("Cú pháp: <code>/searchuser &lt;tên người dùng&gt;</code>", parse_mode="HTML")
+        return
 
-        if cobalt_data:
-            status = cobalt_data.get("status")
-            
-            # Xử lý Video / Direct link từ Cobalt
-            if status in ["stream", "redirect", "tunnel"]:
-                media_url = cobalt_data.get("url")
-                filename = cobalt_data.get("filename", "").lower()
-                
-                await status_msg.edit_text("🚀 Đang gửi file...")
-                if any(ext in filename for ext in [".mp3", ".m4a", ".ogg", ".wav"]):
-                    await update.message.reply_audio(audio=media_url)
-                else:
-                    await update.message.reply_video(video=media_url)
-                await status_msg.delete()
-                return
+    res = await tikwm_req("user/search", {"keyword": keyword, "count": 5})
+    if res and res.get("code") == 0 and res["data"].get("users"):
+        text = f"🔎 <b>Kết quả tìm kiếm user '{html.escape(keyword)}':</b>\n\n"
+        for u in res["data"]["users"][:5]:
+            nick = html.escape(u.get('nickname', ''))
+            uid = html.escape(u.get('unique_id', ''))
+            text += f"• <b>{nick}</b> (@{uid}) - ID: <code>{u['uid']}</code>\n"
+        await update.message.reply_text(text, parse_mode="HTML")
+    else:
+        await update.message.reply_text("❌ Không tìm thấy user.")
 
-            # Xử lý bộ ảnh từ Cobalt
-            elif status == "picker":
-                picker_items = cobalt_data.get("picker", [])
-                images = [item.get("url") for item in picker_items if item.get("url")]
-                if images:
-                    await status_msg.edit_text(f"📸 Tìm thấy {len(images)} ảnh. Đang gửi...")
-                    for i in range(0, len(images), 10):
-                        batch = images[i:i + 10]
-                        await update.message.reply_media_group(
-                            media=[{"type": "photo", "media": img_url} for img_url in batch]
-                        )
-                    await status_msg.delete()
-                    return
+async def cmd_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    unique_id = context.args[0] if context.args else ""
+    if not unique_id:
+        await update.message.reply_text("Cú pháp: <code>/user &lt;unique_id&gt;</code>", parse_mode="HTML")
+        return
 
-        # 2. Nếu Cobalt thất bại và link là TikTok -> Chuyển sang dùng TikWM API làm dự phòng
-        if "tiktok.com" in url:
-            tikwm_data = await fetch_tikwm(session, url)
-            if tikwm_data:
-                if tikwm_data["type"] == "images":
-                    images = tikwm_data["urls"]
-                    await status_msg.edit_text(f"📸 (Dự phòng) Tìm thấy {len(images)} ảnh. Đang gửi...")
-                    for i in range(0, len(images), 10):
-                        batch = images[i:i + 10]
-                        await update.message.reply_media_group(
-                            media=[{"type": "photo", "media": img_url} for img_url in batch]
-                        )
-                    await status_msg.delete()
-                    return
-                elif tikwm_data["type"] == "video":
-                    await status_msg.edit_text("🚀 (Dự phòng) Đang gửi video...")
-                    await update.message.reply_video(
-                        video=tikwm_data["url"], 
-                        caption=tikwm_data["title"][:1024]
-                    )
-                    await status_msg.delete()
-                    return
+    info_res = await tikwm_req("user/info", {"unique_id": unique_id})
+    if info_res and info_res.get("code") == 0:
+        u = info_res["data"]["user"]
+        s = info_res["data"]["stats"]
+        profile_text = (
+            f"👤 <b>{html.escape(u.get('nickname', ''))}</b> (@{html.escape(u.get('unique_id', ''))})\n"
+            f"📝 {html.escape(u.get('signature', 'Không có tiểu sử'))}\n\n"
+            f"👥 Theo dõi: {s.get('followingCount', 0)} | Người theo dõi: {s.get('followerCount', 0)}\n"
+            f"❤️ Tổng Tym: {s.get('heartCount', 0)} | 🎬 Video: {s.get('videoCount', 0)}"
+        )
+        if u.get("avatarLarger"):
+            await update.message.reply_photo(photo=u["avatarLarger"], caption=profile_text, parse_mode="HTML")
+        else:
+            await update.message.reply_text(profile_text, parse_mode="HTML")
 
-        # 3. Nếu cả 2 đều không tải được
-        await status_msg.edit_text("❌ Không thể xử lý link này. Vui lòng kiểm tra lại link hoặc thử lại sau!")
+    posts_res = await tikwm_req("user/posts", {"unique_id": unique_id, "count": 3})
+    if posts_res and posts_res.get("code") == 0 and posts_res["data"].get("videos"):
+        for vid in posts_res["data"]["videos"][:3]:
+            await update.message.reply_video(video=vid["play"], caption=html.escape(vid.get("title", "")))
 
+async def cmd_hashtag(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    hashtag = context.args[0] if context.args else ""
+    if not hashtag:
+        await update.message.reply_text("Cú pháp: <code>/hashtag &lt;tên_hashtag&gt;</code>", parse_mode="HTML")
+        return
+
+    res = await tikwm_req("challenge/posts", {"name": hashtag, "count": 3})
+    if res and res.get("code") == 0 and res["data"].get("videos"):
+        await update.message.reply_text(f"🏷️ <b>Video theo Hashtag #{html.escape(hashtag)}:</b>", parse_mode="HTML")
+        for vid in res["data"]["videos"][:3]:
+            await update.message.reply_video(video=vid["play"], caption=html.escape(vid.get("title", "")))
+    else:
+        await update.message.reply_text("❌ Không tìm thấy hashtag hoặc chưa có video.")
+
+# --- CALLBACK TIKTOK ---
+async def handle_tiktok_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data.startswith("comments_"):
+        video_id = data.split("_")[1]
+        res = await tikwm_req("comment/list", {"url": f"https://www.tiktok.com/@a/video/{video_id}", "count": 5})
+        if res and res.get("code") == 0 and res["data"].get("comments"):
+            cmt_text = "💬 <b>Top Bình luận:</b>\n\n"
+            for c in res["data"]["comments"][:5]:
+                nick = html.escape(c['user']['nickname'])
+                comment = html.escape(c['text'])
+                cmt_text += f"👤 <b>{nick}</b>: {comment}\n"
+            await query.message.reply_text(cmt_text, parse_mode="HTML")
+        else:
+            await query.message.reply_text("❌ Không tải được bình luận.")
+
+    elif data.startswith("music_"):
+        music_id = data.split("_")[1]
+        res = await tikwm_req("music/posts", {"music_id": music_id, "count": 2})
+        if res and res.get("code") == 0 and res["data"].get("videos"):
+            await query.message.reply_text("🎵 <b>Các video sử dụng cùng nhạc này:</b>", parse_mode="HTML")
+            for vid in res["data"]["videos"][:2]:
+                await query.message.reply_video(video=vid["play"], caption=html.escape(vid.get("title", "")))
+
+# --- MAIN ---
 def main():
-    if not BOT_TOKEN:
-        print("Lỗi: Chưa cài đặt BOT_TOKEN!")
-        return
-
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Bot đang chạy...")
+    # Lệnh khởi động & Trợ giúp
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_start))
+    app.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^menu_"))
+
+    # Các lệnh tìm kiếm/tải TikTok
+    app.add_handler(CommandHandler("trending", cmd_trending))
+    app.add_handler(CommandHandler("search", cmd_search))
+    app.add_handler(CommandHandler("searchuser", cmd_search_user))
+    app.add_handler(CommandHandler("user", cmd_user))
+    app.add_handler(CommandHandler("hashtag", cmd_hashtag))
+
+    # Xử lý Callback và Nhận Link
+    app.add_handler(CallbackQueryHandler(handle_tiktok_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+
+    print("Bot đã sẵn sàng hoạt động!")
     app.run_polling()
 
 if __name__ == "__main__":
