@@ -24,7 +24,7 @@ from telegram.ext import (
 
 # ================= CẤU HÌNH TOKEN & API =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
-ALLOWED_USERS = []  # Điền Telegram ID (int) nếu muốn private, để trống nếu public
+ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn private, để trống nếu public
 
 # TikTok API Endpoints
 TIKWM_BASE = "https://www.tikwm.com/api/"
@@ -112,19 +112,22 @@ async def fetch_tiktok_user_info(username: str) -> dict:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
                 if resp.status == 200:
                     return await resp.json(content_type=None)
-                return {"error": f"Mã HTTP {resp.status}"}
+                return {"error": f"Mã phản hồi HTTP {resp.status}"}
         except Exception as e:
             logger.error(f"Tik Info API Error: {e}")
             return {"error": str(e)}
 
+# GIAO DIỆN HIỂN THỊ INFO MỚI (CYBER CARD STYLING)
 def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     if not data or data.get("error"):
         err = data.get("error", "Không tìm thấy người dùng hoặc máy chủ không phản hồi.")
         return (
-            f"╭━━━ ❌ <b>TRA CỨU THẤT BẠI</b>\n"
-            f"┃ 🎯 <b>Target:</b> <code>@{html.escape(username)}</code>\n"
-            f"┃ ⚠️ <b>Lỗi:</b> <i>{html.escape(str(err))}</i>\n"
-            f"╰━━━━━━━━━━━━━━━━━━━━",
+            f"┌───────────────────────────┐\n"
+            f"│  ❌  <b>TRA CỨU THẤT BẠI</b>\n"
+            f"├───────────────────────────┤\n"
+            f"│ 🎯 <b>Target:</b> <code>@{html.escape(username)}</code>\n"
+            f"│ ⚠️ <b>Lỗi:</b> <i>{html.escape(str(err))}</i>\n"
+            f"└───────────────────────────┘",
             None,
         )
 
@@ -136,10 +139,10 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     uid = str(u.get("id") or u.get("uid") or "—")
     bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
     sec_uid = str(u.get("secUid") or u.get("sec_uid") or "—")
-    region = str(u.get("region") or u.get("country") or "—")
+    region = str(u.get("region") or u.get("country") or "N/A").upper()
 
-    verified = "💎 Tích xanh chính chủ" if u.get("verified") or u.get("customVerify") else "⚪ Tài khoản chuẩn"
-    private_acc = "🔒 Riêng tư" if u.get("privateAccount") or u.get("is_private") else "🌐 Công khai"
+    verified_badge = "💠 [TÍCH XANH]" if u.get("verified") or u.get("customVerify") else "⚪ [THƯỜNG]"
+    private_badge = "🔒 [RIÊNG TƯ]" if u.get("privateAccount") or u.get("is_private") else "🌐 [CÔNG KHAI]"
 
     followers = s.get("followerCount") or s.get("followers") or 0
     following = s.get("followingCount") or s.get("following") or 0
@@ -150,26 +153,29 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
 
     panel = (
-        f"╭━━━ 👤 <b>PROFILE TIKTOK</b> ━━━╮\n"
-        f"┃ 📛 <b>Tên:</b> {nickname}\n"
-        f"┃ 🆔 <b>ID:</b> @{unique_id}\n"
-        f"┃ 🔢 <b>UID:</b> <code>{uid}</code>\n"
-        f"┃ 🌏 <b>Vùng:</b> <code>{region}</code> │ <b>Chế độ:</b> {private_acc}\n"
-        f"┃ 🔰 <b>Trạng thái:</b> {verified}\n"
-        f"┣━━━━━━━━━━━━━━━━━━━━┫\n"
-        f"┃ 📊 <b>THỐNG KÊ KÊNH:</b>\n"
-        f"┃  ├ 👥 <b>Followers:</b> <code>{followers:,}</code>\n"
-        f"┃  ├ 👣 <b>Đang theo:</b> <code>{following:,}</code>\n"
-        f"┃  ├ ❤️ <b>Tổng Tym:</b> <code>{hearts:,}</code>\n"
-        f"┃  ├ 🎬 <b>Video:</b> <code>{videos:,}</code>\n"
-        f"┃  └ 👍 <b>Đã thích:</b> <code>{diggs:,}</code>\n"
-        f"┣━━━━━━━━━━━━━━━━━━━━┫\n"
-        f"┃ 📝 <b>Bio:</b> <i>{bio}</i>\n"
+        f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        f"   ✨ <b>HỒ SƠ TÀI KHOẢN TIKTOK</b> ✨\n"
+        f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+        f"🏷 <b>Định danh cá nhân:</b>\n"
+        f" ├ 👤 <b>Tên hiển thị:</b> <b>{nickname}</b>\n"
+        f" ├ 🆔 <b>ID TikTok:</b> <code>@{unique_id}</code>\n"
+        f" ├ 🔢 <b>Mã UID:</b> <code>{uid}</code>\n"
+        f" ├ 🌏 <b>Khu vực:</b> <code>{region}</code>\n"
+        f" └ 🛡 <b>Huy hiệu:</b> {verified_badge} │ {private_badge}\n\n"
+        f"📊 <b>Chỉ số phân tích kênh:</b>\n"
+        f" ┌ 👥 <b>Người theo dõi:</b> <code>{followers:,}</code>\n"
+        f" ├ 👣 <b>Đang theo dõi:</b> <code>{following:,}</code>\n"
+        f" ├ ❤️ <b>Tổng lượt thả tim:</b> <code>{hearts:,}</code>\n"
+        f" ├ 🎬 <b>Video đã đăng tải:</b> <code>{videos:,}</code>\n"
+        f" └ 👍 <b>Lượt video đã thích:</b> <code>{diggs:,}</code>\n\n"
+        f"📝 <b>Lời giới thiệu (Bio):</b>\n"
+        f" <i>« {bio} »</i>\n"
     )
 
     if sec_uid != "—":
-        panel += f"┣━━━━━━━━━━━━━━━━━━━━┫\n┃ 🔑 <b>SecUID:</b>\n┃ <code>{sec_uid}</code>\n"
-    panel += f"╰━━━━━━━━━━━━━━━━━━━━╯"
+        panel += f"\n🔑 <b>SecUID Token:</b>\n<code>{sec_uid}</code>\n"
+
+    panel += f"─────────────────────────────"
 
     return panel, avatar
 
@@ -177,23 +183,22 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
 # ================= GIAO DIỆN PANEL CHÍNH =================
 def build_main_dashboard() -> tuple[str, InlineKeyboardMarkup]:
     text = (
-        "╔══════════════════════╗\n"
-        "   ⚡ <b>TIKTOK TOOLKIT v2.5</b> ⚡\n"
-        "   <i>Status: Online & Ready (2026)</i>\n"
-        "╚══════════════════════╝\n\n"
-        "🟢 <b>HỆ THỐNG ĐANG HOẠT ĐỘNG ỔN ĐỊNH</b>\n\n"
-        "📌 <b>TÍNH NĂNG CHÍNH:</b>\n"
-        "├ 📥 <b>Tải Video / Slide:</b> Gửi trực tiếp link TikTok vào khung chat.\n"
-        "└ 🔎 <b>Tra cứu Info User:</b> Dùng lệnh <code>/check &lt;username&gt;</code>\n\n"
-        "💡 <i>Hệ thống tự nhận link tải không watermark, hỗ trợ chất lượng HD.</i>"
+        "╔══════════════════════════════╗\n"
+        "   ⚡ <b>TIKTOK MASTER DASHBOARD</b> ⚡\n"
+        "╚══════════════════════════════╝\n\n"
+        "🟢 <b>Trạng thái:</b> <code>ĐANG HOẠT ĐỘNG</code>\n\n"
+        "📌 <b>BỘ LỆNH ĐIỀU KHIỂN:</b>\n"
+        "├ 📥 <b>Tải Video / Slide:</b> Gửi trực tiếp link TikTok vào chat.\n"
+        "└ 🔎 <b>Tra cứu User:</b> <code>/getinfo &lt;username&gt;</code> (hoặc <code>/check</code>)\n\n"
+        "💡 <i>Tự động gỡ logo, tải ảnh full chất lượng, trích xuất UID nhanh.</i>"
     )
     keyboard = [
         [
             InlineKeyboardButton("📥 Hướng Dẫn Tải", callback_data="panel_guide_down"),
-            InlineKeyboardButton("🔎 Hướng Dẫn Check", callback_data="panel_guide_check"),
+            InlineKeyboardButton("🔎 Hướng Dẫn GetInfo", callback_data="panel_guide_check"),
         ],
         [
-            InlineKeyboardButton("🔄 Kiểm Tra Ping / Status", callback_data="panel_status"),
+            InlineKeyboardButton("⚡ Kiểm Tra Trạng Thái", callback_data="panel_status"),
         ],
     ]
     return text, InlineKeyboardMarkup(keyboard)
@@ -214,7 +219,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     data = query.data
 
-    back_btn = [[InlineKeyboardButton("⬅️ Quay lại Panel Chính", callback_data="panel_home")]]
+    back_btn = [[InlineKeyboardButton("⬅️ Quay lại Dashboard", callback_data="panel_home")]]
 
     if data == "panel_home":
         text, reply_markup = build_main_dashboard()
@@ -225,8 +230,8 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "╭━━━ 📥 <b>HƯỚNG DẪN TẢI VIDEO / ẢNH</b>\n"
             "┃\n"
             "┃ 1️⃣ Sao chép link video TikTok (hoặc link rút gọn <code>vt.tiktok.com</code>).\n"
-            "┃ 2️⃣ Dán trực tiếp link vào hộp chat của bot.\n"
-            "┃ 3️⃣ Bot sẽ tự xử lý và trả về video MP4 không logo hoặc bộ album ảnh gốc.\n"
+            "┃ 2️⃣ Gửi trực tiếp link vào hộp chat của bot.\n"
+            "┃ 3️⃣ Bot tự động tải về video MP4 không watermark hoặc toàn bộ ảnh HD.\n"
             "┃\n"
             "╰━━━━━━━━━━━━━━━━━━━━"
         )
@@ -234,46 +239,47 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_check":
         text = (
-            "╭━━━ 🔎 <b>HƯỚNG DẪN TRA CỨU USER</b>\n"
+            "╭━━━ 🔎 <b>HƯỚNG DẪN DÙNG GETINFO</b>\n"
             "┃\n"
-            "┃ • Cú pháp: <code>/check &lt;username&gt;</code>\n"
-            "┃ • Ví dụ: <code>/check tiktok</code>\n"
-            "┃ • Ví dụ: <code>/check nguyenvana</code>\n"
+            "┃ • Cú pháp: <code>/getinfo &lt;username&gt;</code>\n"
+            "┃ • Hoặc: <code>/check &lt;username&gt;</code>\n"
+            "┃ • Ví dụ: <code>/getinfo tiktok</code>\n"
             "┃\n"
-            "┃ 💡 <i>Bot sẽ trả về đầy đủ UID, SecUID, số follower, tym và trạng thái tích xanh.</i>\n"
+            "┃ 💡 <i>Hệ thống sẽ trích xuất chi tiết UID, SecUID, số người theo dõi, tym và ảnh đại diện.</i>\n"
             "╰━━━━━━━━━━━━━━━━━━━━"
         )
         await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_status":
         text = (
-            "╭━━━ 🟢 <b>TRẠNG THÁI HỆ THỐNG</b>\n"
-            "┃\n"
-            "┃ ⚙️ <b>TikWM API:</b> Hoạt động bình thường\n"
-            "┃ 🛡️ <b>Fallback Downloader:</b> Sẵn sàng\n"
-            "┃ 📡 <b>User Lookup API:</b> Hoạt động tốt\n"
-            "┃ 🚀 <b>Engine:</b> Asyncio Python 3\n"
-            "┃\n"
-            "╰━━━━━━━━━━━━━━━━━━━━"
+            "┌───────────────────────────┐\n"
+            "│  ⚡ <b>HỆ THỐNG MÁY CHỦ SẴN SÀNG</b> │\n"
+            "├───────────────────────────┤\n"
+            "│ 🟢 <b>TikWM Service:</b> Hoạt động tốt\n"
+            "│ 🟢 <b>User API:</b> Phản hồi ổn định\n"
+            "│ 🛡️ <b>Backup CDN:</b> Active\n"
+            "│ ⏱️ <b>Ping Engine:</b> Tức thời\n"
+            "└───────────────────────────┘"
         )
         await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
-# Lệnh /check <username>
-async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Lệnh /getinfo và /check
+async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
     if not context.args:
         await update.message.reply_text(
-            "⚠️ <b>Cú pháp thiếu tham số:</b>\n"
-            "👉 Hãy nhập: <code>/check &lt;username&gt;</code> (Ví dụ: <code>/check tiktok</code>)",
+            "⚠️ <b>Thiếu tên người dùng!</b>\n"
+            "👉 Hãy dùng cú pháp: <code>/getinfo &lt;username&gt;</code>\n"
+            "<i>Ví dụ: <code>/getinfo tiktok</code></i>",
             parse_mode=ParseMode.HTML,
         )
         return
 
     username = context.args[0].strip().lstrip("@")
     status_msg = await update.message.reply_text(
-        f"⚡ <i>Đang quét dữ liệu người dùng</i> <code>@{html.escape(username)}</code>...",
+        f"⚡ <i>Đang bóc tách thông tin</i> <code>@{html.escape(username)}</code>...",
         parse_mode=ParseMode.HTML,
     )
 
@@ -290,14 +296,13 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
-# CHỈ TỰ ĐỘNG BẮT LINK TIKTOK
+# CHỈ TỰ ĐỘNG BẮT LINK TIKTOK (GIỮ NGUYÊN CODE GỐC)
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
     text = update.message.text.strip()
 
-    # Chỉ xử lý khi có link TikTok trong tin nhắn
     if "tiktok.com" in text:
         words = text.split()
         target_url = next((w for w in words if "tiktok.com" in w), text)
@@ -313,7 +318,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             data = await fallback_tik_download(target_url)
 
         if not data or data.get("code") != 0 or not data.get("data"):
-            await msg.edit_text("❌ <b>Không tải được:</b> Link sai, video riêng tư hoặc đã bị xóa.")
+            await msg.edit_text("❌ <b>Không tải được:</b> Link không đúng, video riêng tư hoặc đã bị xóa.")
             return
 
         res = data["data"]
@@ -322,12 +327,12 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         caption = (
             f"🎬 <b>{title}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
+            f"─────────────────────────────\n"
             f"👤 <b>Tác giả:</b> {author}\n"
             f"❤️ <code>{res.get('digg_count', 0):,}</code> tym │ "
             f"💬 <code>{res.get('comment_count', 0):,}</code> cmt │ "
             f"🔁 <code>{res.get('share_count', 0):,}</code> share\n"
-            f"━━━━━━━━━━━━━━━━━━"
+            f"─────────────────────────────"
         )
 
         try:
@@ -353,7 +358,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
         except Exception as e:
             logger.error(f"Lỗi gửi media: {e}")
-            await update.message.reply_text("❌ Không thể gửi video (Dung lượng tệp vượt giới hạn hoặc CDN timeout).")
+            await update.message.reply_text("❌ Không thể gửi video (Dung lượng tệp vượt giới hạn Telegram hoặc timeout).")
         return
 
 
@@ -364,7 +369,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            TIKTOK TOOLKIT BOT ONLINE                 ║\n"
         "║          Engine: python-telegram-bot v20+            ║\n"
-        "║       Features: TikTok Downloader + Info Lookup      ║\n"
+        "║       Commands: /getinfo, /check & Auto-Downloader   ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -374,7 +379,8 @@ def main():
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
-    app.add_handler(CommandHandler("check", cmd_check))
+    app.add_handler(CommandHandler("getinfo", cmd_getinfo))
+    app.add_handler(CommandHandler("check", cmd_getinfo))
 
     # Callbacks tương tác Panel
     app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
