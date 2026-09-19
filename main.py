@@ -5,6 +5,7 @@ import asyncio
 import html
 import logging
 import os
+import re
 import aiohttp
 from telegram import (
     InlineKeyboardButton,
@@ -46,7 +47,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("TikTokMasterBot")
 
-# Biến lưu session toàn cục tối ưu kết nối
 HTTP_SESSION: aiohttp.ClientSession | None = None
 
 
@@ -63,54 +63,105 @@ async def get_http_session() -> aiohttp.ClientSession:
     return HTTP_SESSION
 
 
-# ================= HÀM XỬ LÝ API TIKTOK =================
+# ================= GIẢI NÉN LINK RÚT GỌN =================
+async def resolve_tiktok_url(url: str) -> str:
+    """Tự động follow redirect của link vt.tiktok.com hoặc vm.tiktok.com."""
+    session = await get_http_session()
+    clean = url.strip()
+    if "vt.tiktok.com" in clean or "vm.tiktok.com" in clean:
+        try:
+            async with session.head(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                return str(resp.url)
+        except Exception:
+            try:
+                async with session.get(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    return str(resp.url)
+            except Exception as e:
+                logger.error(f"Unshorten error: {e}")
+    return clean
+
+
+# ================= HÀM XỬ LÝ DOWNLOAD TIKTOK =================
 async def tikwm_req(endpoint: str = "", params: dict = None):
     session = await get_http_session()
     url = f"{TIKWM_BASE}{endpoint}" if endpoint else TIKWM_BASE
+    
+    post_headers = {
+        **TIK_HEADERS,
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    # Cách 1: POST form-urlencoded (Chuẩn nhất cho TikWM)
     try:
-        if not endpoint:
-            async with session.get(url, params=params or {}, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                if resp.status == 200:
-                    return await resp.json(content_type=None)
-        else:
-            async with session.post(url, data=params or {}, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                if resp.status == 200:
-                    return await resp.json(content_type=None)
+        async with session.post(url, data=params or {}, headers=post_headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            if resp.status == 200:
+                data = await resp.json(content_type=None)
+                if data and data.get("code") == 0:
+                    return data
     except Exception as e:
-        logger.error(f"TikWM Error: {e}")
+        logger.warning(f"TikWM POST fail: {e}")
+
+    # Cách 2: Fallback qua GET params
+    try:
+        async with session.get(url, params=params or {}, headers=TIK_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            if resp.status == 200:
+                data = await resp.json(content_type=None)
+                if data and data.get("code") == 0:
+                    return data
+    except Exception as e:
+        logger.warning(f"TikWM GET fail: {e}")
+
     return None
 
 
 async def fallback_tik_download(tiktok_url: str):
+    """API phụ (LoveTik) tự động kích hoạt khi TikWM bị nghẽn hoặc chặn IP."""
     session = await get_http_session()
-    url = f"https://api.tiklydown.eu.org/api/download?url={tiktok_url}"
+    api_url = "https://lovetik.com/api/ajax/search"
+    payload = {"query": tiktok_url}
+    headers = {
+        **TIK_HEADERS,
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Referer": "https://lovetik.com/",
+    }
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        async with session.post(api_url, data=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
-                video_url = j.get("video", {}).get("noWatermark") or j.get("video", {}).get("watermark")
-                music_url = j.get("music", {}).get("play_url")
-                images = [img.get("url") for img in j.get("images", []) if img.get("url")]
-                return {
-                    "code": 0,
-                    "data": {
-                        "title": j.get("title", "TikTok Media"),
-                        "author": {"nickname": j.get("author", {}).get("name", "N/A")},
-                        "digg_count": j.get("stats", {}).get("likeCount", 0),
-                        "comment_count": j.get("stats", {}).get("commentCount", 0),
-                        "share_count": j.get("stats", {}).get("shareCount", 0),
-                        "play": video_url,
-                        "music": music_url,
-                        "music_info": {
-                            "title": j.get("music", {}).get("title", "Original Sound"),
-                            "author": j.get("music", {}).get("author", "TikTok"),
+                if j.get("status") == "ok":
+                    video_url = None
+                    music_url = None
+                    for link in j.get("links", []):
+                        if link.get("t") == "<b>MP4</b>" or "watermark" not in link.get("t", "").lower():
+                            if not video_url and link.get("a"):
+                                video_url = link.get("a")
+                        if "mp3" in link.get("t", "").lower():
+                            music_url = link.get("a")
+
+                    images = j.get("images", [])
+
+                    return {
+                        "code": 0,
+                        "data": {
+                            "id": j.get("vid", ""),
+                            "title": j.get("desc", "TikTok Media"),
+                            "author": {"nickname": j.get("author", "TikTok User")},
+                            "digg_count": 0,
+                            "comment_count": 0,
+                            "share_count": 0,
+                            "play": video_url,
+                            "hdplay": video_url,
+                            "music": music_url,
+                            "music_info": {
+                                "title": "Original Sound",
+                                "author": j.get("author", "TikTok"),
+                            },
+                            "images": images,
                         },
-                        "images": images,
-                        "id": j.get("id", ""),
-                    },
-                }
+                    }
     except Exception as e:
-        logger.error(f"Fallback API Error: {e}")
+        logger.error(f"Fallback LoveTik error: {e}")
     return None
 
 
@@ -249,7 +300,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "║ • Cú pháp: <code>/music &lt;link_tiktok&gt;</code>\n"
             "║ • Hoặc bấm trực tiếp nút <b>[🎵 Tải nhạc MP3]</b> bên dưới\n"
             "║   mỗi video mà bot vừa tải về.\n"
-            "║ 💡 <i>Trích xuất âm thanh gốc 320kbps rõ ràng, không lẫn tạp âm.</i>\n"
+            "║ 💡 <i>Trích xuất âm thanh gốc 320kbps rõ ràng.</i>\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
@@ -272,8 +323,8 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "╔══════ 📡 <b>HỆ THỐNG MÁY CHỦ BOT</b> ══════╗\n"
             "║\n"
             "║ 🟢 <b>Core Engine:</b> Python AsyncIO\n"
-            "║ 🟢 <b>TikWM Service:</b> Connected (Low Ping)\n"
-            "║ 🟢 <b>Backup CDN:</b> Ready\n"
+            "║ 🟢 <b>TikWM Service:</b> Connected\n"
+            "║ 🟢 <b>Fallback Service:</b> LoveTik Ready\n"
             "║ 🟢 <b>Audio Extractor:</b> Active\n"
             "║ 🟢 <b>User Lookup:</b> Active\n"
             "║\n"
@@ -282,7 +333,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
 
-# Xử lý nút bấm callback tải nhạc trực tiếp dưới video
+# Nút callback tải nhạc dưới video
 async def handle_download_music_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("⏳ Đang trích xuất audio gốc...", show_alert=False)
@@ -346,16 +397,21 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
         return
 
-    target_url = context.args[0].strip()
-    if "tiktok.com" not in target_url:
+    raw_url = context.args[0].strip()
+    if "tiktok.com" not in raw_url:
         await update.message.reply_text("⚠️ Vui lòng cung cấp link TikTok hợp lệ.", parse_mode=ParseMode.HTML)
         return
 
-    msg = await update.message.reply_text("⏳ <i>Đang bóc tách file âm thanh chất lượng cao...</i>", parse_mode=ParseMode.HTML)
+    msg = await update.message.reply_text("⏳ <i>Đang bóc tách file âm thanh...</i>", parse_mode=ParseMode.HTML)
 
-    data = await tikwm_req("", {"url": target_url})
+    # 1. Resolve redirect
+    target_url = await resolve_tiktok_url(raw_url)
+    clean_url = target_url.split("?")[0] if "vt.tiktok.com" not in target_url else target_url
+
+    # 2. Lấy dữ liệu qua TikWM hoặc Fallback
+    data = await tikwm_req("", {"url": clean_url})
     if not data or data.get("code") != 0:
-        data = await fallback_tik_download(target_url)
+        data = await fallback_tik_download(clean_url)
 
     if not data or data.get("code") != 0 or not data.get("data"):
         await msg.edit_text("❌ <b>Không trích xuất được:</b> Video riêng tư, bị xoá hoặc link không hợp lệ.")
@@ -437,18 +493,25 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     text = update.message.text.strip()
 
     if "tiktok.com" in text:
-        words = text.split()
-        target_url = next((w for w in words if "tiktok.com" in w), text)
+        match = re.search(r"https?://[^\s]+", text)
+        if not match:
+            return
+        raw_url = match.group(0)
 
         msg = await update.message.reply_text("⏳ <i>Đang bóc tách dữ liệu đa phương tiện...</i>", parse_mode=ParseMode.HTML)
 
-        # 1. Thử qua TikWM
-        data = await tikwm_req("", {"url": target_url, "hd": 1})
+        # 1. Giải nén redirect nếu là vt.tiktok.com hoặc vm.tiktok.com
+        target_url = await resolve_tiktok_url(raw_url)
+        # Loại bỏ các tham số thừa đằng sau dấu ?
+        clean_url = target_url.split("?")[0] if "vt.tiktok.com" not in target_url else target_url
 
-        # 2. Dự phòng API phụ
+        # 2. Thử tải qua TikWM
+        data = await tikwm_req("", {"url": clean_url, "hd": 1})
+
+        # 3. Dự phòng API phụ (LoveTik)
         if not data or data.get("code") != 0:
-            logger.warning("TikWM không phản hồi, chuyển sang fallback API...")
-            data = await fallback_tik_download(target_url)
+            logger.warning("TikWM không phản hồi, chuyển sang Fallback LoveTik...")
+            data = await fallback_tik_download(clean_url)
 
         if not data or data.get("code") != 0 or not data.get("data"):
             await msg.edit_text("❌ <b>Tải thất bại:</b> Video đã bị xóa, tài khoản riêng tư hoặc link sai.")
