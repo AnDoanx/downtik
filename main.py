@@ -2,13 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import asyncio
-import hashlib
 import html
-import json
 import logging
-import time
+import os
 import aiohttp
-import requests
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -26,23 +23,13 @@ from telegram.ext import (
 )
 
 # ================= CẤU HÌNH TOKEN & API =================
-BOT_TOKEN = "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98"
+# Khuyến nghị lấy qua biến môi trường để bảo mật
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
 ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn giới hạn quyền, để trống nếu public
 
-# TikTok API Base
+# TikTok API Endpoints
 TIKWM_BASE = "https://www.tikwm.com/api/"
-
-# CapCut Base Config
-CAPCUT_AID = "348188"
-CAPCUT_SDK_VER = "2.1.10-tiktok"
-CAPCUT_LOGIN_HOST = "https://login-row.www.capcut.com"
-CAPCUT_WWW_HOST = "https://www.capcut.com"
-CAPCUT_XOR_KEY = 0x05
-CAPCUT_HASH_SALT = "aDy0TUhtql92P7hScCs97YWMT-jub2q9"
-CAPCUT_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/149.0.7827.197 Safari/537.36"
-)
+TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -50,288 +37,92 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ================= HÀM HỖ TRỢ CAPCUT =================
-def capcut_xor_encode(s: str) -> str:
-    return "".join(f"{b ^ CAPCUT_XOR_KEY:02x}" for b in s.encode("utf-8"))
-
-def capcut_normalize_email(email: str) -> str:
-    e = email.lower().strip()
-    if "@" not in e:
-        return e
-    user, _, dom = e.partition("@")
-    if dom == "gmail.com":
-        user = user.split("+")[0].replace(".", "")
-    return f"{user}@{dom}"
-
-def capcut_hashed_id(email: str) -> str:
-    norm = capcut_normalize_email(email) + CAPCUT_HASH_SALT
-    return hashlib.sha256(norm.encode()).hexdigest()
-
-def capcut_common_params(extra=None):
-    p = {
-        "aid": CAPCUT_AID,
-        "account_sdk_source": "web",
-        "sdk_version": CAPCUT_SDK_VER,
-        "language": "en",
-        "timezone_name": "Etc/GMT-7",
-        "browser_language": "en-US",
-        "browser_name": "Mozilla",
-        "browser_platform": "Win32",
-        "browser_version": "5.0 (Windows NT 10.0; Win64; x64)",
-        "cookie_enabled": "true",
-        "screen_height": "768",
-        "screen_width": "1366",
-    }
-    if extra:
-        p.update(extra)
-    return p
-
-def make_capcut_session():
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": CAPCUT_UA,
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
-        "Origin": "https://www.capcut.com",
-        "Referer": "https://www.capcut.com/",
-    })
-    return s
-
-class CapCutError(Exception):
-    pass
-
-class CapCutClient:
-    def __init__(self, session):
-        self.s = session
-        self.commerce_domain = "https://commerce-api-sg.capcut.com"
-
-    def get_region(self, email):
-        url = f"{CAPCUT_LOGIN_HOST}/passport/web/region/"
-        body = f"type=2&hashed_id={capcut_hashed_id(email)}"
-        r = self.s.post(
-            url,
-            params=capcut_common_params({"mix_mode": "1"}),
-            data=body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=25,
-        )
-        r.raise_for_status()
-        return r.json()
-
-    def check_email_registered(self, email):
-        url = f"{CAPCUT_LOGIN_HOST}/passport/web/user/check_email_registered"
-        body = f"mix_mode=1&email={capcut_xor_encode(email)}&fixed_mix_mode=1"
-        r = self.s.post(
-            url,
-            params=capcut_common_params(),
-            data=body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=25,
-        )
-        r.raise_for_status()
-        return r.json()
-
-    def login(self, email, password):
-        url = f"{CAPCUT_LOGIN_HOST}/passport/web/email/login/"
-        body = (
-            f"mix_mode=1&email={capcut_xor_encode(email)}"
-            f"&password={capcut_xor_encode(password)}&fixed_mix_mode=1"
-        )
-        r = self.s.post(
-            url,
-            params=capcut_common_params(),
-            data=body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=25,
-        )
-        if r.status_code in (403, 429, 461, 462):
-            raise CapCutError(f"Login bị chặn WAF (HTTP {r.status_code})")
-        r.raise_for_status()
-        j = r.json()
-        if j.get("message") != "success":
-            err_msg = j.get("data", {}).get("description") or j.get("message")
-            raise CapCutError(f"{err_msg}")
-        return j.get("data", {})
-
-    def get_account_info(self):
-        url = f"{CAPCUT_WWW_HOST}/passport/web/account/info/"
-        r = self.s.get(url, params=capcut_common_params(), timeout=25)
-        r.raise_for_status()
-        return r.json().get("data", {})
-
-    def get_subscription_info(self):
-        url = f"{self.commerce_domain}/commerce/v1/subscription/user_info"
-        r = self.s.post(url, json={"aid": CAPCUT_AID, "scene": "vip"}, timeout=25)
-        r.raise_for_status()
-        resp = r.json().get("response")
-        return json.loads(resp) if isinstance(resp, str) else (resp or {})
-
-    def get_benefits(self):
-        url = f"{self.commerce_domain}/commerce/v3/benefits/batch_get_user_benefit"
-        body = {
-            "query_list": [
-                {"resource_type": "aigc", "resource_id": "get_all", "benefit_type_list": []},
-                {"resource_type": "normal_func", "resource_id": "get_all", "benefit_type_list": []},
-            ]
-        }
-        r = self.s.post(url, json=body, timeout=25)
-        r.raise_for_status()
-        resp = r.json().get("response")
-        return json.loads(resp) if isinstance(resp, str) else (resp or {})
-
-    def get_credit(self):
-        url = f"{self.commerce_domain}/commerce/v1/benefits/user_credit"
-        r = self.s.post(url, json={}, timeout=25)
-        r.raise_for_status()
-        resp = r.json().get("response")
-        return json.loads(resp) if isinstance(resp, str) else (resp or {})
-
-def run_capcut_check(email: str, password: str) -> dict:
-    c = CapCutClient(make_capcut_session())
-    country = None
-
-    try:
-        region = c.get_region(email)
-        country = region.get("data", {}).get("country_code")
-    except Exception:
-        pass
-
-    try:
-        reg = c.check_email_registered(email)
-        if reg.get("data", {}).get("is_registered") is False:
-            return {"status": False, "error": "Email chưa đăng ký CapCut"}
-    except Exception:
-        pass
-
-    try:
-        c.login(email, password)
-    except CapCutError as e:
-        return {"status": False, "error": str(e)}
-    except Exception as e:
-        return {"status": False, "error": f"Lỗi kết nối: {e}"}
-
-    account = {}
-    sub_info = {}
-    benefits = {}
-    credit = {}
-
-    try:
-        account = c.get_account_info()
-    except Exception:
-        pass
-
-    try:
-        sub_info = c.get_subscription_info()
-    except Exception:
-        pass
-
-    try:
-        benefits = c.get_benefits()
-    except Exception:
-        pass
-
-    try:
-        credit = c.get_credit()
-    except Exception:
-        pass
-
-    return {
-        "status": True,
-        "email": email,
-        "password": password,
-        "country": country,
-        "account": account,
-        "sub_info": sub_info,
-        "benefits": benefits,
-        "credit": credit,
-    }
-
-def format_capcut_report(res: dict) -> str:
-    if not res.get("status"):
-        return (
-            f"❌ <b>Kiểm tra thất bại</b>\n"
-            f"• <b>Tài khoản:</b> <code>{html.escape(res.get('email', ''))}</code>\n"
-            f"• <b>Lý do:</b> <i>{html.escape(str(res.get('error')))}</i>"
-        )
-
-    acc = res.get("account", {})
-    sub = res.get("sub_info", {})
-    pro = bool(sub.get("flag"))
-    country = res.get("country") or "—"
-    name = html.escape(str(acc.get("screen_name") or "—"))
-    uid = str(acc.get("user_id_str") or acc.get("user_id") or "—")
-
-    created = "—"
-    if acc.get("create_time"):
-        created = time.strftime("%d/%m/%Y", time.gmtime(acc["create_time"]))
-
-    if pro:
-        pro_status = "🌟 <b>PRO / VIP: CÓ</b>"
-        end = sub.get("end_time") or 0
-        exp_str = time.strftime("%d/%m/%Y %H:%M UTC", time.gmtime(end)) if end else "Không giới hạn"
-        sub_type = html.escape(str(sub.get("subscribe_type") or sub.get("product_id") or "—"))
-        trial = "Có (Free trial)" if sub.get("is_free_trial") else "Không"
-        vip_details = (
-            f"  ├ Hạn dùng: <code>{exp_str}</code>\n"
-            f"  ├ Gói: <code>{sub_type}</code>\n"
-            f"  └ Dùng thử: {trial}"
-        )
-    else:
-        pro_status = "⚪ <b>PRO / VIP: KHÔNG</b>"
-        vip_details = "  └ Gói thường (Free)"
-
-    cr = res.get("credit", {}).get("credit", {})
-    vip_cr = cr.get("vip_credit", 0)
-    gift_cr = cr.get("gift_credit", 0)
-    pur_cr = cr.get("purchase_credit", 0)
-    total_cr = vip_cr + gift_cr + pur_cr
-
-    vip_items = []
-    for asset in res.get("benefits", {}).get("asset_list") or []:
-        for det in asset.get("asset_details") or []:
-            if det.get("role") == "vip":
-                quota_all = det.get("quota_all", 0)
-                quota_left = det.get("quota_left", 0)
-                if quota_all > 0 or quota_left > 0:
-                    vip_items.append(f"  • {asset.get('benefit_type')}: {quota_left}/{quota_all}")
-
-    ben_str = "\n".join(vip_items[:4]) if vip_items else "  • Không có hạn mức VIP riêng"
-
-    return (
-        f"🎬 <b>KẾT QUẢ CHECK CAPCUT</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Tên:</b> {name}\n"
-        f"🆔 <b>User ID:</b> <code>{uid}</code>\n"
-        f"📧 <b>Email:</b> <code>{html.escape(res.get('email'))}</code>\n"
-        f"🔑 <b>Mật khẩu:</b> <code>{html.escape(res.get('password'))}</code>\n"
-        f"🌍 <b>Khu vực:</b> <code>{country}</code> | <b>Tạo:</b> {created}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"{pro_status}\n"
-        f"{vip_details}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"💎 <b>AI Credit:</b> <b>{total_cr}</b> (VIP: {vip_cr} | Gift: {gift_cr} | Mua: {pur_cr})\n"
-        f"🎁 <b>Đặc quyền (Quota):</b>\n{ben_str}\n"
-        f"━━━━━━━━━━━━━━━━━━"
-    )
-
 def is_authorized(user_id: int) -> bool:
     if not ALLOWED_USERS:
         return True
     return user_id in ALLOWED_USERS
 
 
-# ================= HÀM XỬ LÝ TIKTOK =================
+# ================= HÀM XỬ LÝ API TIKTOK =================
 async def tikwm_req(endpoint: str = "", params: dict = None):
     url = f"{TIKWM_BASE}{endpoint}" if endpoint else TIKWM_BASE
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(url, data=params or {}) as resp:
+            async with session.post(url, data=params or {}, timeout=aiohttp.ClientTimeout(total=20)) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 return None
         except Exception as e:
             logger.error(f"TikWM Error: {e}")
             return None
+
+async def fetch_tiktok_user_info(username: str) -> dict:
+    """Gọi API kiểm tra thông tin chi tiết tài khoản TikTok."""
+    clean_user = username.strip().lstrip("@")
+    url = f"{TIK_INFO_API}{clean_user}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+                if resp.status == 200:
+                    return await resp.json(content_type=None)
+                return {"error": f"Lỗi HTTP {resp.status}"}
+        except Exception as e:
+            logger.error(f"Tik Info API Error: {e}")
+            return {"error": str(e)}
+
+def format_user_info_report(data: dict, username: str) -> tuple[str, str | None]:
+    """Format kết quả trả về từ API check info."""
+    if not data or data.get("error"):
+        err = data.get("error", "Không tìm thấy người dùng hoặc API không phản hồi.")
+        return f"❌ <b>Kiểm tra thất bại (@{html.escape(username)}):</b>\n<i>{html.escape(str(err))}</i>", None
+
+    # Tùy thuộc cấu trúc json thực tế trả về từ php (hỗ trợ cả dạng bọc data/user hoặc phẳng)
+    u = data.get("data", {}).get("user") or data.get("userInfo", {}).get("user") or data.get("user") or data
+    s = data.get("data", {}).get("stats") or data.get("userInfo", {}).get("stats") or data.get("stats") or {}
+
+    nickname = html.escape(str(u.get("nickname") or u.get("name") or "—"))
+    unique_id = html.escape(str(u.get("uniqueId") or u.get("unique_id") or username))
+    uid = str(u.get("id") or u.get("uid") or "—")
+    bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử"))
+    sec_uid = str(u.get("secUid") or u.get("sec_uid") or "—")
+    region = str(u.get("region") or u.get("country") or "—")
+    
+    verified = "✅ Đã xác minh (Tích xanh)" if u.get("verified") or u.get("customVerify") else "❌ Chưa xác minh"
+    private_acc = "🔒 Riêng tư" if u.get("privateAccount") or u.get("is_private") else "🌍 Công khai"
+
+    followers = s.get("followerCount") or s.get("followers") or 0
+    following = s.get("followingCount") or s.get("following") or 0
+    hearts = s.get("heartCount") or s.get("hearts") or s.get("heart") or 0
+    videos = s.get("videoCount") or s.get("video") or 0
+    diggs = s.get("diggCount") or 0
+
+    avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
+
+    report = (
+        f"👤 <b>THÔNG TIN TÀI KHOẢN TIKTOK</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📛 <b>Tên:</b> {nickname}\n"
+        f"🆔 <b>Username:</b> @{unique_id}\n"
+        f"🔢 <b>UID:</b> <code>{uid}</code>\n"
+        f"🌍 <b>Khu vực:</b> {region} | <b>Trạng thái:</b> {private_acc}\n"
+        f"🏅 <b>Tích xanh:</b> {verified}\n"
+        f"📝 <b>Tiểu sử:</b> <i>{bio}</i>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📊 <b>THỐNG KÊ:</b>\n"
+        f"• <b>Followers:</b> {followers:,}\n"
+        f"• <b>Đang theo dõi:</b> {following:,}\n"
+        f"• <b>Lượt thích (Tym):</b> {hearts:,}\n"
+        f"• <b>Video đã đăng:</b> {videos:,}\n"
+        f"• <b>Đã thích (Digg):</b> {diggs:,}\n"
+    )
+
+    if sec_uid != "—":
+        report += f"━━━━━━━━━━━━━━━━━━\n🔑 <b>SecUID:</b> <code>{sec_uid}</code>"
+
+    return report, avatar
 
 
 # ================= TELEGRAM HANDLERS =================
@@ -340,15 +131,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [InlineKeyboardButton("🎬 Menu TikTok", callback_data="menu_tiktok")],
-        [InlineKeyboardButton("⚙️ Menu CapCut", callback_data="menu_capcut")],
+        [InlineKeyboardButton("🎬 Menu Tải TikTok", callback_data="menu_down")],
+        [InlineKeyboardButton("🔍 Menu Check Info", callback_data="menu_info")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     text = (
-        "🤖 <b>Chào mừng bạn đến với Multi-Tool Bot!</b>\n\n"
-        "Bot tích hợp chức năng tải/tìm kiếm TikTok và kiểm tra tài khoản CapCut Pro.\n"
-        "Vui lòng chọn tính năng cần xem hướng dẫn bên dưới:"
+        "🤖 <b>Chào mừng bạn đến với TikTok Multi-Tool Bot!</b>\n\n"
+        "✨ <b>Các chức năng chính:</b>\n"
+        "• Tải video / slide ảnh TikTok không logo (gửi link trực tiếp).\n"
+        "• Tra cứu thông tin tài khoản TikTok chi tiết qua API.\n"
+        "• Tìm kiếm video, user, hashtag, xu hướng.\n\n"
+        "Bấm menu bên dưới để xem hướng dẫn cụ thể:"
     )
 
     if update.message:
@@ -361,26 +155,23 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    if data == "menu_tiktok":
+    if data == "menu_down":
         help_text = (
-            "🎬 <b>Chức năng Tải & Tìm kiếm TikTok:</b>\n\n"
-            "• Gửi trực tiếp <b>link TikTok</b> vào khung chat để tải.\n"
-            "• <code>/trending [VN]</code>: Nguồn cấp xu hướng.\n"
-            "• <code>/search &lt;từ khóa&gt;</code>: Tìm kiếm video.\n"
-            "• <code>/searchuser &lt;tên&gt;</code>: Tìm người dùng.\n"
-            "• <code>/user &lt;unique_id&gt;</code>: Profile & video người dùng.\n"
-            "• <code>/hashtag &lt;tên&gt;</code>: Video theo hashtag."
+            "🎬 <b>Chức năng Tải & Khám phá TikTok:</b>\n\n"
+            "• Gửi trực tiếp <b>link TikTok</b> vào chat để tải video/ảnh.\n"
+            "• <code>/trending [VN]</code>: Nguồn cấp video xu hướng.\n"
+            "• <code>/search &lt;từ khóa&gt;</code>: Tìm kiếm video theo tên.\n"
+            "• <code>/searchuser &lt;tên&gt;</code>: Tìm kiếm user theo từ khóa.\n"
+            "• <code>/hashtag &lt;tên&gt;</code>: Xem video theo hashtag."
         )
         await query.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
-    elif data == "menu_capcut":
+    elif data == "menu_info":
         help_text = (
-            "⚙️ <b>Chức năng Kiểm tra CapCut:</b>\n\n"
-            "• Check 1 tài khoản:\n"
-            "  <code>/check email|mật_khẩu</code>\n\n"
-            "• Check nhiều tài khoản:\n"
-            "  Gửi trực tiếp danh sách dạng mỗi dòng một tài khoản:\n"
-            "  <code>email|mật_khẩu</code> (hoặc <code>email:mật_khẩu</code>)"
+            "🔍 <b>Chức năng Tra Cứu User:</b>\n\n"
+            "• Dùng lệnh: <code>/check &lt;username&gt;</code>\n"
+            "  <i>Ví dụ: <code>/check nguyenvana</code> hoặc <code>/check @nguyenvana</code></i>\n\n"
+            "• Hoặc dùng lệnh: <code>/user &lt;username&gt;</code> để vừa check vừa xem 3 video mới nhất."
         )
         await query.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
@@ -390,7 +181,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     text = update.message.text.strip()
 
-    # Nhánh 1: Gửi Link TikTok
+    # Nhánh 1: Tải Link TikTok
     if "tiktok.com" in text:
         msg = await update.message.reply_text("⏳ Đang xử lý link TikTok...")
         data = await tikwm_req("", {"url": text, "hd": 1})
@@ -407,7 +198,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         caption = (
             f"🎬 <b>{title}</b>\n\n"
             f"👤 Tác giả: {author}\n"
-            f"❤️ {res.get('digg_count', 0)} | 💬 {res.get('comment_count', 0)} | 🔁 {res.get('share_count', 0)}"
+            f"❤️ {res.get('digg_count', 0):,} | 💬 {res.get('comment_count', 0):,} | 🔁 {res.get('share_count', 0):,}"
         )
 
         keyboard = []
@@ -431,59 +222,51 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("❌ Không thể gửi phương tiện.")
         return
 
-    # Nhánh 2: Danh sách CapCut bulk check (hàng loạt qua định dạng email|pass hoặc email:pass)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    accounts = []
-    for line in lines:
-        if "|" in line:
-            u, _, p = line.partition("|")
-            accounts.append((u.strip(), p.strip()))
-        elif ":" in line and "@" in line:
-            u, _, p = line.partition(":")
-            accounts.append((u.strip(), p.strip()))
+    # Nhánh 2: Nếu người dùng gửi @username trực tiếp vào chat
+    if text.startswith("@") and " " not in text:
+        username = text.lstrip("@")
+        status_msg = await update.message.reply_text(f"⏳ Đang tra cứu thông tin <code>@{username}</code>...", parse_mode=ParseMode.HTML)
+        info_data = await fetch_tiktok_user_info(username)
+        report, avatar = format_user_info_report(info_data, username)
+        
+        await status_msg.delete()
+        if avatar:
+            try:
+                await update.message.reply_photo(photo=avatar, caption=report, parse_mode=ParseMode.HTML)
+                return
+            except Exception:
+                pass
+        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
-    if accounts:
-        if len(accounts) > 20:
-            await update.message.reply_text("⚠️ Vui lòng gửi tối đa 20 tài khoản mỗi lần.")
-            return
-
-        total = len(accounts)
-        prog_msg = await update.message.reply_text(f"⏳ Đang kiểm tra <b>{total}</b> tài khoản CapCut...", parse_mode=ParseMode.HTML)
-        loop = asyncio.get_running_loop()
-
-        for email, password in accounts:
-            res = await loop.run_in_executor(None, run_capcut_check, email, password)
-            report = format_capcut_report(res)
-            await update.message.reply_text(report, parse_mode=ParseMode.HTML)
-            await asyncio.sleep(1.5)
-
-        await prog_msg.edit_text("✅ <b>Đã kiểm tra xong toàn bộ danh sách!</b>", parse_mode=ParseMode.HTML)
-
+# Lệnh /check username sử dụng API php mới
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
     if not context.args:
         await update.message.reply_text(
-            "⚠️ Cú pháp: <code>/check email|password</code>", parse_mode=ParseMode.HTML
+            "⚠️ Cú pháp: <code>/check &lt;username&gt;</code>\nVí dụ: <code>/check tiktok</code>",
+            parse_mode=ParseMode.HTML,
         )
         return
 
-    raw_input = context.args[0]
-    sep = "|" if "|" in raw_input else (":" if ":" in raw_input else None)
-    if not sep:
-        await update.message.reply_text("⚠️ Định dạng sai. Dùng <code>email|password</code>", parse_mode=ParseMode.HTML)
-        return
+    username = context.args[0].strip().lstrip("@")
+    status_msg = await update.message.reply_text(f"⏳ Đang tra cứu <code>@{username}</code>...", parse_mode=ParseMode.HTML)
+    
+    info_data = await fetch_tiktok_user_info(username)
+    report, avatar = format_user_info_report(info_data, username)
 
-    email, _, password = raw_input.partition(sep)
-    email, password = email.strip(), password.strip()
+    await status_msg.delete()
+    if avatar:
+        try:
+            await update.message.reply_photo(photo=avatar, caption=report, parse_mode=ParseMode.HTML)
+            return
+        except Exception as e:
+            logger.warning(f"Không thể gửi ảnh avatar: {e}")
 
-    status_msg = await update.message.reply_text(f"⏳ Đang kiểm tra <code>{email}</code>...", parse_mode=ParseMode.HTML)
-    loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, run_capcut_check, email, password)
-    await status_msg.edit_text(format_capcut_report(res), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
-# TikTok commands
+# Các lệnh tìm kiếm & xem feed của TikTok
 async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -533,28 +316,26 @@ async def cmd_search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
-    unique_id = context.args[0] if context.args else ""
+    unique_id = context.args[0].strip().lstrip("@") if context.args else ""
     if not unique_id:
         await update.message.reply_text("Cú pháp: <code>/user &lt;unique_id&gt;</code>", parse_mode=ParseMode.HTML)
         return
 
-    info_res = await tikwm_req("user/info", {"unique_id": unique_id})
-    if info_res and info_res.get("code") == 0:
-        u = info_res["data"]["user"]
-        s = info_res["data"]["stats"]
-        profile_text = (
-            f"👤 <b>{html.escape(u.get('nickname', ''))}</b> (@{html.escape(u.get('unique_id', ''))})\n"
-            f"📝 {html.escape(u.get('signature', 'Không có tiểu sử'))}\n\n"
-            f"👥 Theo dõi: {s.get('followingCount', 0)} | Follower: {s.get('followerCount', 0)}\n"
-            f"❤️ Tổng Tym: {s.get('heartCount', 0)} | 🎬 Video: {s.get('videoCount', 0)}"
-        )
-        if u.get("avatarLarger"):
-            await update.message.reply_photo(photo=u["avatarLarger"], caption=profile_text, parse_mode=ParseMode.HTML)
-        else:
-            await update.message.reply_text(profile_text, parse_mode=ParseMode.HTML)
+    # Lấy thông tin chi tiết qua API check info
+    info_data = await fetch_tiktok_user_info(unique_id)
+    report, avatar = format_user_info_report(info_data, unique_id)
+    if avatar:
+        try:
+            await update.message.reply_photo(photo=avatar, caption=report, parse_mode=ParseMode.HTML)
+        except Exception:
+            await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
+    # Lấy 3 video mới nhất từ TikWM
     posts_res = await tikwm_req("user/posts", {"unique_id": unique_id, "count": 3})
     if posts_res and posts_res.get("code") == 0 and posts_res["data"].get("videos"):
+        await update.message.reply_text("📹 <b>3 Video gần nhất của kênh:</b>", parse_mode=ParseMode.HTML)
         for vid in posts_res["data"]["videos"][:3]:
             await update.message.reply_video(video=vid["play"], caption=html.escape(vid.get("title", "")))
 
@@ -603,26 +384,24 @@ async def handle_tiktok_callback(update: Update, context: ContextTypes.DEFAULT_T
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Commands Menu & CapCut
+    # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("check", cmd_check))
-
-    # Commands TikTok
+    app.add_handler(CommandHandler("user", cmd_user))
     app.add_handler(CommandHandler("trending", cmd_trending))
     app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(CommandHandler("searchuser", cmd_search_user))
-    app.add_handler(CommandHandler("user", cmd_user))
     app.add_handler(CommandHandler("hashtag", cmd_hashtag))
 
     # Callbacks
     app.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^menu_"))
     app.add_handler(CallbackQueryHandler(handle_tiktok_callback))
 
-    # Nhận text: Tự động phân loại Link TikTok hoặc List Account CapCut
+    # Message Handler (Link TikTok hoặc @username)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
-    print("Bot đã sẵn sàng hoạt động!")
+    print("TikTok Multi-Tool Bot đã khởi chạy thành công!")
     app.run_polling()
 
 if __name__ == "__main__":
