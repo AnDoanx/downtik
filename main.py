@@ -23,7 +23,6 @@ from telegram.ext import (
 )
 
 # ================= CẤU HÌNH TOKEN & API =================
-# Khuyến nghị lấy qua biến môi trường để bảo mật
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
 ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn giới hạn quyền, để trống nếu public
 
@@ -79,7 +78,6 @@ def format_user_info_report(data: dict, username: str) -> tuple[str, str | None]
         err = data.get("error", "Không tìm thấy người dùng hoặc API không phản hồi.")
         return f"❌ <b>Kiểm tra thất bại (@{html.escape(username)}):</b>\n<i>{html.escape(str(err))}</i>", None
 
-    # Tùy thuộc cấu trúc json thực tế trả về từ php (hỗ trợ cả dạng bọc data/user hoặc phẳng)
     u = data.get("data", {}).get("user") or data.get("userInfo", {}).get("user") or data.get("user") or data
     s = data.get("data", {}).get("stats") or data.get("userInfo", {}).get("stats") or data.get("stats") or {}
 
@@ -138,11 +136,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "🤖 <b>Chào mừng bạn đến với TikTok Multi-Tool Bot!</b>\n\n"
-        "✨ <b>Các chức năng chính:</b>\n"
-        "• Tải video / slide ảnh TikTok không logo (gửi link trực tiếp).\n"
-        "• Tra cứu thông tin tài khoản TikTok chi tiết qua API.\n"
-        "• Tìm kiếm video, user, hashtag, xu hướng.\n\n"
-        "Bấm menu bên dưới để xem hướng dẫn cụ thể:"
+        "✨ <b>Cách sử dụng:</b>\n"
+        "• <b>Tải video/ảnh:</b> Gửi trực tiếp link TikTok vào chat (tự động nhận diện).\n"
+        "• <b>Kiểm tra tài khoản:</b> Dùng lệnh <code>/check &lt;username&gt;</code>.\n\n"
+        "Bấm menu bên dưới để xem hướng dẫn chi tiết:"
     )
 
     if update.message:
@@ -158,30 +155,31 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "menu_down":
         help_text = (
             "🎬 <b>Chức năng Tải & Khám phá TikTok:</b>\n\n"
-            "• Gửi trực tiếp <b>link TikTok</b> vào chat để tải video/ảnh.\n"
+            "• Gửi trực tiếp <b>link TikTok</b> vào chat để tải video/ảnh tự động.\n"
             "• <code>/trending [VN]</code>: Nguồn cấp video xu hướng.\n"
-            "• <code>/search &lt;từ khóa&gt;</code>: Tìm kiếm video theo tên.\n"
-            "• <code>/searchuser &lt;tên&gt;</code>: Tìm kiếm user theo từ khóa.\n"
+            "• <code>/search &lt;từ khóa&gt;</code>: Tìm kiếm video theo từ khóa.\n"
+            "• <code>/searchuser &lt;tên&gt;</code>: Tìm kiếm người dùng.\n"
             "• <code>/hashtag &lt;tên&gt;</code>: Xem video theo hashtag."
         )
         await query.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
     elif data == "menu_info":
         help_text = (
-            "🔍 <b>Chức năng Tra Cứu User:</b>\n\n"
+            "🔍 <b>Chức năng Tra Cứu Tài Khoản TikTok:</b>\n\n"
             "• Dùng lệnh: <code>/check &lt;username&gt;</code>\n"
-            "  <i>Ví dụ: <code>/check nguyenvana</code> hoặc <code>/check @nguyenvana</code></i>\n\n"
-            "• Hoặc dùng lệnh: <code>/user &lt;username&gt;</code> để vừa check vừa xem 3 video mới nhất."
+            "  <i>Ví dụ: <code>/check tiktok</code> hoặc <code>/check nguyenvana</code></i>\n\n"
+            "• Dùng lệnh: <code>/user &lt;username&gt;</code> để tra cứu kèm xem 3 video mới nhất."
         )
         await query.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
+# CHỈ TỰ ĐỘNG XỬ LÝ KHI CÓ LINK TIKTOK (Bỏ check khi tag @user)
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
     text = update.message.text.strip()
 
-    # Nhánh 1: Tải Link TikTok
+    # Chỉ xử lý khi người dùng gửi Link TikTok
     if "tiktok.com" in text:
         msg = await update.message.reply_text("⏳ Đang xử lý link TikTok...")
         data = await tikwm_req("", {"url": text, "hd": 1})
@@ -222,23 +220,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("❌ Không thể gửi phương tiện.")
         return
 
-    # Nhánh 2: Nếu người dùng gửi @username trực tiếp vào chat
-    if text.startswith("@") and " " not in text:
-        username = text.lstrip("@")
-        status_msg = await update.message.reply_text(f"⏳ Đang tra cứu thông tin <code>@{username}</code>...", parse_mode=ParseMode.HTML)
-        info_data = await fetch_tiktok_user_info(username)
-        report, avatar = format_user_info_report(info_data, username)
-        
-        await status_msg.delete()
-        if avatar:
-            try:
-                await update.message.reply_photo(photo=avatar, caption=report, parse_mode=ParseMode.HTML)
-                return
-            except Exception:
-                pass
-        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
-
-# Lệnh /check username sử dụng API php mới
+# Lệnh /check username
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -262,11 +244,11 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(photo=avatar, caption=report, parse_mode=ParseMode.HTML)
             return
         except Exception as e:
-            logger.warning(f"Không thể gửi ảnh avatar: {e}")
+            logger.warning(f"Không thể gửi avatar: {e}")
 
     await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
-# Các lệnh tìm kiếm & xem feed của TikTok
+# Các lệnh TikTok khác
 async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -321,7 +303,6 @@ async def cmd_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Cú pháp: <code>/user &lt;unique_id&gt;</code>", parse_mode=ParseMode.HTML)
         return
 
-    # Lấy thông tin chi tiết qua API check info
     info_data = await fetch_tiktok_user_info(unique_id)
     report, avatar = format_user_info_report(info_data, unique_id)
     if avatar:
@@ -332,7 +313,6 @@ async def cmd_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
-    # Lấy 3 video mới nhất từ TikWM
     posts_res = await tikwm_req("user/posts", {"unique_id": unique_id, "count": 3})
     if posts_res and posts_res.get("code") == 0 and posts_res["data"].get("videos"):
         await update.message.reply_text("📹 <b>3 Video gần nhất của kênh:</b>", parse_mode=ParseMode.HTML)
@@ -398,7 +378,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^menu_"))
     app.add_handler(CallbackQueryHandler(handle_tiktok_callback))
 
-    # Message Handler (Link TikTok hoặc @username)
+    # Message Handler: CHỈ XỬ LÝ LINK TIKTOK ĐỂ TỰ ĐỘNG TẢI
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
     print("TikTok Multi-Tool Bot đã khởi chạy thành công!")
