@@ -24,30 +24,27 @@ from telegram.ext import (
 
 # ================= CẤU HÌNH TOKEN & API =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
-ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn giới hạn quyền, để trống nếu public
+ALLOWED_USERS = []  # Điền Telegram ID (int) nếu muốn private, để trống nếu public
 
 # TikTok API Endpoints
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
-# SoundCloud API
-SCL_API_BASE = "https://api-v2.soundcloud.com/search/tracks"
-SCL_CLIENT_ID = "Tbe9YspsDY5jcNlK6GmSimUxBQeXn8Ho"
-
-# Headers giả lập trình duyệt
-COMMON_HEADERS = {
+TIK_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/javascript, */*; q=0.01",
     "Accept-Language": "vi,en-US;q=0.9,en;q=0.8",
+    "Referer": "https://www.tikwm.com/",
 }
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
+    level=logging.INFO,
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("TikTokMasterBot")
 
 
 def is_authorized(user_id: int) -> bool:
@@ -56,11 +53,10 @@ def is_authorized(user_id: int) -> bool:
     return user_id in ALLOWED_USERS
 
 
-# ================= HÀM XỬ LÝ TIKTOK =================
+# ================= HÀM XỬ LÝ API TIKTOK =================
 async def tikwm_req(endpoint: str = "", params: dict = None):
     url = f"{TIKWM_BASE}{endpoint}" if endpoint else TIKWM_BASE
-    headers = {**COMMON_HEADERS, "Referer": "https://www.tikwm.com/"}
-    async with aiohttp.ClientSession(headers=headers) as session:
+    async with aiohttp.ClientSession(headers=TIK_HEADERS) as session:
         try:
             if not endpoint:
                 async with session.get(url, params=params or {}, timeout=aiohttp.ClientTimeout(total=20)) as resp:
@@ -77,8 +73,7 @@ async def tikwm_req(endpoint: str = "", params: dict = None):
 
 async def fallback_tik_download(tiktok_url: str):
     url = f"https://api.tiklydown.eu.org/api/download?url={tiktok_url}"
-    headers = {**COMMON_HEADERS, "Referer": "https://www.tikwm.com/"}
-    async with aiohttp.ClientSession(headers=headers) as session:
+    async with aiohttp.ClientSession(headers=TIK_HEADERS) as session:
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
                 if resp.status == 200:
@@ -88,7 +83,7 @@ async def fallback_tik_download(tiktok_url: str):
                     return {
                         "code": 0,
                         "data": {
-                            "title": j.get("title", "TikTok Video"),
+                            "title": j.get("title", "TikTok Media"),
                             "author": {"nickname": j.get("author", {}).get("name", "N/A")},
                             "digg_count": j.get("stats", {}).get("likeCount", 0),
                             "comment_count": j.get("stats", {}).get("commentCount", 0),
@@ -100,26 +95,38 @@ async def fallback_tik_download(tiktok_url: str):
                         },
                     }
         except Exception as e:
-            logger.error(f"Fallback Download Error: {e}")
+            logger.error(f"Fallback API Error: {e}")
     return None
 
 async def fetch_tiktok_user_info(username: str) -> dict:
     clean_user = username.strip().lstrip("@")
     url = f"{TIK_INFO_API}{clean_user}"
-    async with aiohttp.ClientSession(headers=COMMON_HEADERS) as session:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        )
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
                 if resp.status == 200:
                     return await resp.json(content_type=None)
-                return {"error": f"Lỗi HTTP {resp.status}"}
+                return {"error": f"Mã HTTP {resp.status}"}
         except Exception as e:
             logger.error(f"Tik Info API Error: {e}")
             return {"error": str(e)}
 
-def format_user_info_report(data: dict, username: str) -> tuple[str, str | None]:
+def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     if not data or data.get("error"):
-        err = data.get("error", "Không tìm thấy người dùng hoặc API không phản hồi.")
-        return f"❌ <b>Kiểm tra thất bại (@{html.escape(username)}):</b>\n<i>{html.escape(str(err))}</i>", None
+        err = data.get("error", "Không tìm thấy người dùng hoặc máy chủ không phản hồi.")
+        return (
+            f"╭━━━ ❌ <b>TRA CỨU THẤT BẠI</b>\n"
+            f"┃ 🎯 <b>Target:</b> <code>@{html.escape(username)}</code>\n"
+            f"┃ ⚠️ <b>Lỗi:</b> <i>{html.escape(str(err))}</i>\n"
+            f"╰━━━━━━━━━━━━━━━━━━━━",
+            None,
+        )
 
     u = data.get("data", {}).get("user") or data.get("userInfo", {}).get("user") or data.get("user") or data
     s = data.get("data", {}).get("stats") or data.get("userInfo", {}).get("stats") or data.get("stats") or {}
@@ -127,12 +134,12 @@ def format_user_info_report(data: dict, username: str) -> tuple[str, str | None]
     nickname = html.escape(str(u.get("nickname") or u.get("name") or "—"))
     unique_id = html.escape(str(u.get("uniqueId") or u.get("unique_id") or username))
     uid = str(u.get("id") or u.get("uid") or "—")
-    bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử"))
+    bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
     sec_uid = str(u.get("secUid") or u.get("sec_uid") or "—")
     region = str(u.get("region") or u.get("country") or "—")
 
-    verified = "✅ Đã xác minh (Tích xanh)" if u.get("verified") or u.get("customVerify") else "❌ Chưa xác minh"
-    private_acc = "🔒 Riêng tư" if u.get("privateAccount") or u.get("is_private") else "🌍 Công khai"
+    verified = "💎 Tích xanh chính chủ" if u.get("verified") or u.get("customVerify") else "⚪ Tài khoản chuẩn"
+    private_acc = "🔒 Riêng tư" if u.get("privateAccount") or u.get("is_private") else "🌐 Công khai"
 
     followers = s.get("followerCount") or s.get("followers") or 0
     following = s.get("followingCount") or s.get("following") or 0
@@ -142,131 +149,136 @@ def format_user_info_report(data: dict, username: str) -> tuple[str, str | None]
 
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
 
-    report = (
-        f"👤 <b>THÔNG TIN TÀI KHOẢN TIKTOK</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📛 <b>Tên:</b> {nickname}\n"
-        f"🆔 <b>Username:</b> @{unique_id}\n"
-        f"🔢 <b>UID:</b> <code>{uid}</code>\n"
-        f"🌍 <b>Khu vực:</b> {region} | <b>Trạng thái:</b> {private_acc}\n"
-        f"🏅 <b>Tích xanh:</b> {verified}\n"
-        f"📝 <b>Tiểu sử:</b> <i>{bio}</i>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📊 <b>THỐNG KÊ:</b>\n"
-        f"• <b>Followers:</b> {followers:,}\n"
-        f"• <b>Đang theo dõi:</b> {following:,}\n"
-        f"• <b>Lượt thích (Tym):</b> {hearts:,}\n"
-        f"• <b>Video đã đăng:</b> {videos:,}\n"
-        f"• <b>Đã thích:</b> {diggs:,}\n"
+    panel = (
+        f"╭━━━ 👤 <b>PROFILE TIKTOK</b> ━━━╮\n"
+        f"┃ 📛 <b>Tên:</b> {nickname}\n"
+        f"┃ 🆔 <b>ID:</b> @{unique_id}\n"
+        f"┃ 🔢 <b>UID:</b> <code>{uid}</code>\n"
+        f"┃ 🌏 <b>Vùng:</b> <code>{region}</code> │ <b>Chế độ:</b> {private_acc}\n"
+        f"┃ 🔰 <b>Trạng thái:</b> {verified}\n"
+        f"┣━━━━━━━━━━━━━━━━━━━━┫\n"
+        f"┃ 📊 <b>THỐNG KÊ KÊNH:</b>\n"
+        f"┃  ├ 👥 <b>Followers:</b> <code>{followers:,}</code>\n"
+        f"┃  ├ 👣 <b>Đang theo:</b> <code>{following:,}</code>\n"
+        f"┃  ├ ❤️ <b>Tổng Tym:</b> <code>{hearts:,}</code>\n"
+        f"┃  ├ 🎬 <b>Video:</b> <code>{videos:,}</code>\n"
+        f"┃  └ 👍 <b>Đã thích:</b> <code>{diggs:,}</code>\n"
+        f"┣━━━━━━━━━━━━━━━━━━━━┫\n"
+        f"┃ 📝 <b>Bio:</b> <i>{bio}</i>\n"
     )
 
     if sec_uid != "—":
-        report += f"━━━━━━━━━━━━━━━━━━\n🔑 <b>SecUID:</b> <code>{sec_uid}</code>"
+        panel += f"┣━━━━━━━━━━━━━━━━━━━━┫\n┃ 🔑 <b>SecUID:</b>\n┃ <code>{sec_uid}</code>\n"
+    panel += f"╰━━━━━━━━━━━━━━━━━━━━╯"
 
-    return report, avatar
+    return panel, avatar
 
 
-# ================= HÀM XỬ LÝ SOUNDCLOUD =================
-async def search_soundcloud(query: str, limit: int = 5):
-    params = {
-        "q": query,
-        "client_id": SCL_CLIENT_ID,
-        "limit": limit,
-    }
-    headers = {**COMMON_HEADERS, "Referer": "https://soundcloud.com/"}
-    async with aiohttp.ClientSession(headers=headers) as session:
-        try:
-            async with session.get(SCL_API_BASE, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status == 401:
-                    return {"error": "unauthorized"}
-                elif resp.status != 200:
-                    return {"error": f"status_{resp.status}"}
-                return await resp.json(content_type=None)
-        except Exception as e:
-            logger.error(f"SoundCloud Error: {e}")
-            return {"error": str(e)}
+# ================= GIAO DIỆN PANEL CHÍNH =================
+def build_main_dashboard() -> tuple[str, InlineKeyboardMarkup]:
+    text = (
+        "╔══════════════════════╗\n"
+        "   ⚡ <b>TIKTOK TOOLKIT v2.5</b> ⚡\n"
+        "   <i>Status: Online & Ready (2026)</i>\n"
+        "╚══════════════════════╝\n\n"
+        "🟢 <b>HỆ THỐNG ĐANG HOẠT ĐỘNG ỔN ĐỊNH</b>\n\n"
+        "📌 <b>TÍNH NĂNG CHÍNH:</b>\n"
+        "├ 📥 <b>Tải Video / Slide:</b> Gửi trực tiếp link TikTok vào khung chat.\n"
+        "└ 🔎 <b>Tra cứu Info User:</b> Dùng lệnh <code>/check &lt;username&gt;</code>\n\n"
+        "💡 <i>Hệ thống tự nhận link tải không watermark, hỗ trợ chất lượng HD.</i>"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("📥 Hướng Dẫn Tải", callback_data="panel_guide_down"),
+            InlineKeyboardButton("🔎 Hướng Dẫn Check", callback_data="panel_guide_check"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Kiểm Tra Ping / Status", callback_data="panel_status"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
 
 
 # ================= TELEGRAM HANDLERS =================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
-
-    text = (
-        "🤖 <b>Chào mừng bạn đến với Multi-Tool Bot!</b>\n\n"
-        "✨ <b>Danh sách tính năng:</b>\n"
-        "1. <b>Tải TikTok:</b> Gửi trực tiếp link TikTok vào khung chat.\n"
-        "2. <b>Check Info TikTok:</b> <code>/check &lt;username&gt;</code>\n"
-        "3. <b>Tìm nhạc SoundCloud:</b> <code>/scl &lt;tên bài hát&gt;</code>\n"
-        "4. <b>Khám phá TikTok:</b> <code>/trending</code>, <code>/search</code>, <code>/searchuser</code>\n"
-    )
+    text, reply_markup = build_main_dashboard()
     if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+    elif update.callback_query:
+        await update.callback_query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
-# Lệnh /scl tìm nhạc SoundCloud
-async def cmd_scl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        return
+async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
 
-    if not context.args:
-        await update.message.reply_text(
-            "⚠️ Vui lòng nhập từ khóa tìm kiếm.\nVí dụ: <code>/scl Cắt đôi nỗi sầu</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
+    back_btn = [[InlineKeyboardButton("⬅️ Quay lại Panel Chính", callback_data="panel_home")]]
 
-    query = " ".join(context.args).strip()
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    if data == "panel_home":
+        text, reply_markup = build_main_dashboard()
+        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
-    res = await search_soundcloud(query, limit=5)
-
-    if isinstance(res, dict) and res.get("error") == "unauthorized":
-        await update.message.reply_text("❌ Client ID SoundCloud đã hết hạn. Vui lòng cập nhật Client ID mới!")
-        return
-    elif not res or "collection" not in res or not res["collection"]:
-        await update.message.reply_text("❌ Không tìm thấy bài hát nào trên SoundCloud.")
-        return
-
-    for item in res["collection"]:
-        title = html.escape(item.get("title") or "Không rõ tiêu đề")
-        artist = html.escape(item.get("user", {}).get("username") or "Không rõ nghệ sĩ")
-        link = item.get("permalink_url") or "https://soundcloud.com"
-        thumb = item.get("artwork_url") or item.get("user", {}).get("avatar_url")
-
-        if thumb:
-            thumb = thumb.replace("large", "t500x500")
-
+    elif data == "panel_guide_down":
         text = (
-            f"🎵 <b>{title}</b>\n"
-            f"👤 <b>Nghệ sĩ:</b> {artist}\n"
-            f"🔗 <a href='{link}'>Nghe trên SoundCloud</a>"
+            "╭━━━ 📥 <b>HƯỚNG DẪN TẢI VIDEO / ẢNH</b>\n"
+            "┃\n"
+            "┃ 1️⃣ Sao chép link video TikTok (hoặc link rút gọn <code>vt.tiktok.com</code>).\n"
+            "┃ 2️⃣ Dán trực tiếp link vào hộp chat của bot.\n"
+            "┃ 3️⃣ Bot sẽ tự xử lý và trả về video MP4 không logo hoặc bộ album ảnh gốc.\n"
+            "┃\n"
+            "╰━━━━━━━━━━━━━━━━━━━━"
         )
+        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
-        try:
-            if thumb:
-                await update.message.reply_photo(photo=thumb, caption=text, parse_mode=ParseMode.HTML)
-            else:
-                await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-        except Exception:
-            await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    elif data == "panel_guide_check":
+        text = (
+            "╭━━━ 🔎 <b>HƯỚNG DẪN TRA CỨU USER</b>\n"
+            "┃\n"
+            "┃ • Cú pháp: <code>/check &lt;username&gt;</code>\n"
+            "┃ • Ví dụ: <code>/check tiktok</code>\n"
+            "┃ • Ví dụ: <code>/check nguyenvana</code>\n"
+            "┃\n"
+            "┃ 💡 <i>Bot sẽ trả về đầy đủ UID, SecUID, số follower, tym và trạng thái tích xanh.</i>\n"
+            "╰━━━━━━━━━━━━━━━━━━━━"
+        )
+        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
-# Lệnh /check info TikTok
+    elif data == "panel_status":
+        text = (
+            "╭━━━ 🟢 <b>TRẠNG THÁI HỆ THỐNG</b>\n"
+            "┃\n"
+            "┃ ⚙️ <b>TikWM API:</b> Hoạt động bình thường\n"
+            "┃ 🛡️ <b>Fallback Downloader:</b> Sẵn sàng\n"
+            "┃ 📡 <b>User Lookup API:</b> Hoạt động tốt\n"
+            "┃ 🚀 <b>Engine:</b> Asyncio Python 3\n"
+            "┃\n"
+            "╰━━━━━━━━━━━━━━━━━━━━"
+        )
+        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+
+# Lệnh /check <username>
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
     if not context.args:
         await update.message.reply_text(
-            "⚠️ Cú pháp: <code>/check &lt;username&gt;</code>\nVí dụ: <code>/check tiktok</code>",
+            "⚠️ <b>Cú pháp thiếu tham số:</b>\n"
+            "👉 Hãy nhập: <code>/check &lt;username&gt;</code> (Ví dụ: <code>/check tiktok</code>)",
             parse_mode=ParseMode.HTML,
         )
         return
 
     username = context.args[0].strip().lstrip("@")
-    status_msg = await update.message.reply_text(f"⏳ Đang tra cứu <code>@{username}</code>...", parse_mode=ParseMode.HTML)
+    status_msg = await update.message.reply_text(
+        f"⚡ <i>Đang quét dữ liệu người dùng</i> <code>@{html.escape(username)}</code>...",
+        parse_mode=ParseMode.HTML,
+    )
 
     info_data = await fetch_tiktok_user_info(username)
-    report, avatar = format_user_info_report(info_data, username)
+    report, avatar = format_user_info_panel(info_data, username)
 
     await status_msg.delete()
     if avatar:
@@ -274,52 +286,62 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(photo=avatar, caption=report, parse_mode=ParseMode.HTML)
             return
         except Exception as e:
-            logger.warning(f"Không thể gửi avatar: {e}")
+            logger.warning(f"Lỗi gửi avatar: {e}")
 
     await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
-# XỬ LÝ TEXT: CHỈ TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK
+# CHỈ TỰ ĐỘNG BẮT LINK TIKTOK
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
     text = update.message.text.strip()
 
+    # Chỉ xử lý khi có link TikTok trong tin nhắn
     if "tiktok.com" in text:
         words = text.split()
         target_url = next((w for w in words if "tiktok.com" in w), text)
 
-        msg = await update.message.reply_text("⏳ Đang xử lý link TikTok...")
+        msg = await update.message.reply_text("⏳ <i>Đang bóc tách dữ liệu TikTok...</i>", parse_mode=ParseMode.HTML)
 
+        # 1. Thử lấy từ TikWM
         data = await tikwm_req("", {"url": target_url, "hd": 1})
+
+        # 2. Dự phòng API phụ nếu TikWM lỗi
         if not data or data.get("code") != 0:
-            logger.warning("TikWM lỗi, chuyển sang Fallback API...")
+            logger.warning("TikWM không phản hồi, chuyển fallback downloader...")
             data = await fallback_tik_download(target_url)
 
         if not data or data.get("code") != 0 or not data.get("data"):
-            await msg.edit_text("❌ Link không hợp lệ, video riêng tư hoặc server tải đang bảo trì.")
+            await msg.edit_text("❌ <b>Không tải được:</b> Link sai, video riêng tư hoặc đã bị xóa.")
             return
 
         res = data["data"]
-        title = html.escape(res.get("title", "TikTok Video"))
-        author = html.escape(res.get("author", {}).get("nickname", "N/A"))
+        title = html.escape(res.get("title") or "TikTok Video")
+        author = html.escape(res.get("author", {}).get("nickname") or "N/A")
 
         caption = (
-            f"🎬 <b>{title}</b>\n\n"
-            f"👤 Tác giả: {author}\n"
-            f"❤️ {res.get('digg_count', 0):,} | 💬 {res.get('comment_count', 0):,} | 🔁 {res.get('share_count', 0):,}"
+            f"🎬 <b>{title}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Tác giả:</b> {author}\n"
+            f"❤️ <code>{res.get('digg_count', 0):,}</code> tym │ "
+            f"💬 <code>{res.get('comment_count', 0):,}</code> cmt │ "
+            f"🔁 <code>{res.get('share_count', 0):,}</code> share\n"
+            f"━━━━━━━━━━━━━━━━━━"
         )
 
         try:
+            # Dạng bài Album ảnh
             if res.get("images"):
                 await msg.delete()
                 media = [InputMediaPhoto(media=img) for img in res["images"][:10]]
                 await update.message.reply_media_group(media=media)
                 await update.message.reply_text(caption, parse_mode=ParseMode.HTML)
             else:
+                # Dạng Video MP4
                 video_url = res.get("hdplay") or res.get("play")
                 if not video_url:
-                    await msg.edit_text("❌ Không tìm thấy URL video tải xuống.")
+                    await msg.edit_text("❌ Không bóc tách được URL video chất lượng cao.")
                     return
                 await msg.delete()
                 await update.message.reply_video(
@@ -331,57 +353,37 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
         except Exception as e:
             logger.error(f"Lỗi gửi media: {e}")
-            await update.message.reply_text("❌ Lỗi gửi media lên Telegram.")
+            await update.message.reply_text("❌ Không thể gửi video (Dung lượng tệp vượt giới hạn hoặc CDN timeout).")
         return
-
-# Các lệnh phụ khác
-async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        return
-    region = context.args[0] if context.args else "VN"
-    res = await tikwm_req("feed/list", {"region": region, "count": 5})
-    if res and res.get("code") == 0:
-        await update.message.reply_text(f"🔥 <b>Top Xu Hướng ({html.escape(region)}):</b>", parse_mode=ParseMode.HTML)
-        for vid in res["data"][:3]:
-            caption = f"🎬 {html.escape(vid.get('title', ''))}\n👤 {html.escape(vid['author']['nickname'])}"
-            await update.message.reply_video(video=vid["play"], caption=caption)
-    else:
-        await update.message.reply_text("❌ Không thể lấy nguồn cấp xu hướng.")
-
-async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        return
-    keywords = " ".join(context.args)
-    if not keywords:
-        await update.message.reply_text("Cú pháp: <code>/search &lt;từ khóa&gt;</code>", parse_mode=ParseMode.HTML)
-        return
-
-    res = await tikwm_req("feed/search", {"keywords": keywords, "count": 5, "cursor": 0})
-    if res and res.get("code") == 0 and res["data"].get("videos"):
-        await update.message.reply_text(f"🔍 <b>Kết quả:</b> <code>{html.escape(keywords)}</code>", parse_mode=ParseMode.HTML)
-        for vid in res["data"]["videos"][:3]:
-            await update.message.reply_video(video=vid["play"], caption=html.escape(vid.get("title", "")))
-    else:
-        await update.message.reply_text("❌ Không tìm thấy kết quả.")
 
 
 # ================= KHỞI CHẠY BOT =================
 def main():
+    terminal_banner = (
+        "\n"
+        "╔══════════════════════════════════════════════════════╗\n"
+        "║            TIKTOK TOOLKIT BOT ONLINE                 ║\n"
+        "║          Engine: python-telegram-bot v20+            ║\n"
+        "║       Features: TikTok Downloader + Info Lookup      ║\n"
+        "╚══════════════════════════════════════════════════════╝\n"
+    )
+    print(terminal_banner)
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
-    app.add_handler(CommandHandler("scl", cmd_scl))
     app.add_handler(CommandHandler("check", cmd_check))
-    app.add_handler(CommandHandler("trending", cmd_trending))
-    app.add_handler(CommandHandler("search", cmd_search))
 
-    # Tự động tải link TikTok
+    # Callbacks tương tác Panel
+    app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
+
+    # Tự động tải khi gửi link TikTok
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
-    print("Bot tổng hợp TikTok + SoundCloud đã khởi chạy thành công!")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
