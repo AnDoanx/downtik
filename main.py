@@ -117,7 +117,7 @@ async def fetch_tiktok_user_info(username: str) -> dict:
             logger.error(f"Tik Info API Error: {e}")
             return {"error": str(e)}
 
-# GIAO DIỆN HIỂN THỊ INFO MỚI (CYBER CARD STYLING)
+# GIAO DIỆN PANEL GETINFO (ĐÃ LOẠI BỎ SECUID)
 def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     if not data or data.get("error"):
         err = data.get("error", "Không tìm thấy người dùng hoặc máy chủ không phản hồi.")
@@ -138,7 +138,6 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     unique_id = html.escape(str(u.get("uniqueId") or u.get("unique_id") or username))
     uid = str(u.get("id") or u.get("uid") or "—")
     bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
-    sec_uid = str(u.get("secUid") or u.get("sec_uid") or "—")
     region = str(u.get("region") or u.get("country") or "N/A").upper()
 
     verified_badge = "💠 [TÍCH XANH]" if u.get("verified") or u.get("customVerify") else "⚪ [THƯỜNG]"
@@ -170,12 +169,8 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
         f" └ 👍 <b>Lượt video đã thích:</b> <code>{diggs:,}</code>\n\n"
         f"📝 <b>Lời giới thiệu (Bio):</b>\n"
         f" <i>« {bio} »</i>\n"
+        f"─────────────────────────────"
     )
-
-    if sec_uid != "—":
-        panel += f"\n🔑 <b>SecUID Token:</b>\n<code>{sec_uid}</code>\n"
-
-    panel += f"─────────────────────────────"
 
     return panel, avatar
 
@@ -245,7 +240,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "┃ • Hoặc: <code>/check &lt;username&gt;</code>\n"
             "┃ • Ví dụ: <code>/getinfo tiktok</code>\n"
             "┃\n"
-            "┃ 💡 <i>Hệ thống sẽ trích xuất chi tiết UID, SecUID, số người theo dõi, tym và ảnh đại diện.</i>\n"
+            "┃ 💡 <i>Hệ thống sẽ trích xuất chi tiết UID, số người theo dõi, tym và ảnh đại diện.</i>\n"
             "╰━━━━━━━━━━━━━━━━━━━━"
         )
         await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -296,7 +291,7 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
-# CHỈ TỰ ĐỘNG BẮT LINK TIKTOK (GIỮ NGUYÊN CODE GỐC)
+# CHỈ TỰ ĐỘNG BẮT LINK TIKTOK
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
