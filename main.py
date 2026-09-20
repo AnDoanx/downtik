@@ -29,15 +29,18 @@ BOT_START_TIME = time.time()
 
 # ================= CẤU HÌNH TOKEN & API =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
-ALLOWED_USERS = []
+ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn private, để trống nếu public
 
+# TikTok API Endpoints
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
+# Facebook Graph API & Tokens
 FB_TOKENS = [
     "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
 ]
 
+# Banner Images theo từng tác vụ
 IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
 IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
@@ -49,7 +52,7 @@ TIK_HEADERS = {
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "vi,en-US;q=0.9,en;q=0.8",
+    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
 logging.basicConfig(
@@ -82,13 +85,12 @@ def estimate_fb_creation_details(uid: str) -> str:
 
     val = int(uid)
     if val < 10000000:
-        return "Năm 2004 - 2006 (Giai đoạn thử nghiệm Harvard/Mỹ)"
+        return "Năm 2004 - 2006 (Giai đoạn đầu)"
     elif val < 100000000:
-        return "Năm 2006 - 2008 (Mở rộng toàn cầu)"
+        return "Năm 2006 - 2008"
     elif val < 1000000000:
         return "Năm 2008 - 2009"
 
-    # Dải 15 chữ số bắt đầu bằng 10000
     if str(val).startswith("10000"):
         part = int(str(val)[5:8])
         if part < 15:
@@ -108,7 +110,6 @@ def estimate_fb_creation_details(uid: str) -> str:
         else:
             return "Năm 2016"
 
-    # Dải số 10001 - 10009
     if str(val).startswith("10001"):
         return "Năm 2016 - 2017"
     elif str(val).startswith("10002"):
@@ -126,7 +127,7 @@ def estimate_fb_creation_details(uid: str) -> str:
     elif str(val).startswith("10009"):
         return "Năm 2023 - 2024"
     elif str(val).startswith("6155") or str(val).startswith("6156"):
-        return "Năm 2024 - 2025 (Tài khoản mới)"
+        return "Năm 2024 - 2025"
     elif str(val).startswith("6157"):
         return "Năm 2025 - 2026"
 
@@ -153,7 +154,6 @@ async def get_fb_id(input_str: str) -> str | None:
 
     session = await get_http_session()
 
-    # Thử qua Graph API
     for token in FB_TOKENS:
         try:
             url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
@@ -165,7 +165,6 @@ async def get_fb_id(input_str: str) -> str | None:
         except Exception:
             pass
 
-    # TraoDoiSub Resolver
     try:
         async with session.post("https://id.traodoisub.com/api.php", data={"link": clean}, timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status == 200:
@@ -175,7 +174,6 @@ async def get_fb_id(input_str: str) -> str | None:
     except Exception:
         pass
 
-    # FFB Resolver
     try:
         async with session.get(f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}", timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status == 200:
@@ -207,10 +205,11 @@ async def fetch_fb_info(uid: str) -> dict | None:
         "username": None,
     }
 
-    # 1. Graph API: Lấy thông tin cơ bản
+    # BƯỚC 1: Lấy qua Graph API mở rộng
+    fields_target = "id,name,gender,is_verified,short_name,username,updated_time,about,hometown,location,work,education"
     for token in FB_TOKENS:
         try:
-            url = f"https://graph.facebook.com/{uid}?fields=id,name,first_name,last_name,gender,is_verified,short_name,username,updated_time&access_token={token}"
+            url = f"https://graph.facebook.com/{uid}?fields={fields_target}&access_token={token}"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
                 res = await resp.json(content_type=None)
                 if res and "name" in res:
@@ -219,70 +218,111 @@ async def fetch_fb_info(uid: str) -> dict | None:
                     result["verified"] = res.get("is_verified", False)
                     result["username"] = res.get("username")
                     result["updated_time"] = res.get("updated_time")
+                    result["about"] = res.get("about")
+
+                    # Bóc tách Hometown & Location
+                    if isinstance(res.get("hometown"), dict):
+                        result["hometown"] = res["hometown"].get("name")
+                    elif res.get("hometown"):
+                        result["hometown"] = str(res.get("hometown"))
+
+                    if isinstance(res.get("location"), dict):
+                        result["location"] = res["location"].get("name")
+                    elif res.get("location"):
+                        result["location"] = str(res.get("location"))
+
+                    # Bóc tách Công việc
+                    if res.get("work") and isinstance(res["work"], list):
+                        work_items = []
+                        for w in res["work"][:2]:
+                            employer = w.get("employer", {}).get("name")
+                            pos = w.get("position", {}).get("name")
+                            if employer and pos:
+                                work_items.append(f"{pos} tại {employer}")
+                            elif employer:
+                                work_items.append(f"Làm việc tại {employer}")
+                        if work_items:
+                            result["work"] = " | ".join(work_items)
+
+                    # Bóc tách Học vấn
+                    if res.get("education") and isinstance(res["education"], list):
+                        edu_items = []
+                        for ed in res["education"][:2]:
+                            school = ed.get("school", {}).get("name")
+                            if school:
+                                edu_items.append(school)
+                        if edu_items:
+                            result["education"] = " | ".join(edu_items)
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Graph API pass: {e}")
 
-    # 2. Scraper qua API FindIDs
-    try:
-        scraper_url = f"https://api.findids.net/api/facebook/profile?id={uid}"
-        async with session.get(scraper_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-            if resp.status == 200:
-                s_data = await resp.json(content_type=None)
-                if isinstance(s_data, dict) and s_data.get("data"):
-                    info = s_data["data"]
-                    if not result["name"]:
-                        result["name"] = info.get("name")
-                    result["followers"] = info.get("follower") or info.get("followers") or result["followers"]
-                    result["created_time"] = info.get("created_time") or info.get("join_date") or result["created_time"]
-                    result["hometown"] = info.get("hometown") or result["hometown"]
-                    result["location"] = info.get("location") or result["location"]
-                    result["about"] = info.get("bio") or info.get("about") or result["about"]
-                    result["education"] = info.get("education") or result["education"]
-                    result["work"] = info.get("work") or result["work"]
-    except Exception:
-        pass
-
-    # 3. Quét Web Scraper trực tiếp từ HTML công khai của Facebook (Lấy Follower & Nơi ở nếu các API trên bị thiếu)
-    if not result["followers"] or not result["location"] or not result["about"]:
+    # BƯỚC 2: Quét mã nguồn tĩnh từ mbasic.facebook.com/uid/about
+    if not (result["hometown"] and result["location"] and result["work"] and result["education"]):
         try:
-            fb_web_url = f"https://m.facebook.com/{uid}"
+            about_url = f"https://mbasic.facebook.com/{uid}/about"
             custom_headers = {
-                **TIK_HEADERS,
-                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
             }
-            async with session.get(fb_web_url, headers=custom_headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            async with session.get(about_url, headers=custom_headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
                 if r.status == 200:
-                    html_text = await r.text()
+                    raw_html = await r.text()
 
-                    # Cào số người theo dõi
-                    if not result["followers"]:
-                        fol_match = re.search(r"Có\s+([\d.,]+)\s+người\s+theo\s+dõi", html_text, re.IGNORECASE)
-                        if not fol_match:
-                            fol_match = re.search(r"Followed by\s+([\d.,]+)\s+people", html_text, re.IGNORECASE)
-                        if fol_match:
-                            result["followers"] = fol_match.group(1).replace(".", "").replace(",", "")
-
-                    # Cào nơi sống / quê quán
-                    if not result["location"]:
-                        live_match = re.search(r"Sống tại\s+<[^>]+>([^<]+)</a>", html_text)
-                        if not live_match:
-                            live_match = re.search(r"Lives in\s+<[^>]+>([^<]+)</a>", html_text)
-                        if live_match:
-                            result["location"] = live_match.group(1)
-
+                    # Bóc tách Quê quán
                     if not result["hometown"]:
-                        home_match = re.search(r"Đến từ\s+<[^>]+>([^<]+)</a>", html_text)
-                        if not home_match:
-                            home_match = re.search(r"From\s+<[^>]+>([^<]+)</a>", html_text)
-                        if home_match:
-                            result["hometown"] = home_match.group(1)
+                        m_home = re.search(r'(?:Đến từ|From)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                        if not m_home:
+                            m_home = re.search(r'(?:Quê quán|Hometown)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                        if m_home:
+                            result["hometown"] = m_home.group(1).strip()
 
-                    # Cào tiểu sử (Bio)
-                    if not result["about"]:
-                        bio_match = re.search(r'<div class="[^"]*" data-sigil="profile-intro-card-bio"><span>([^<]+)</span>', html_text)
-                        if bio_match:
-                            result["about"] = bio_match.group(1)
+                    # Bóc tách Nơi ở hiện tại
+                    if not result["location"]:
+                        m_loc = re.search(r'(?:Sống tại|Lives in)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                        if not m_loc:
+                            m_loc = re.search(r'(?:Tỉnh/Thành phố hiện tại|Current city)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                        if m_loc:
+                            result["location"] = m_loc.group(1).strip()
+
+                    # Bóc tách Công việc
+                    if not result["work"]:
+                        m_work = re.search(r'(?:Làm việc tại|Works at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                        if m_work:
+                            result["work"] = f"Làm việc tại {m_work.group(1).strip()}"
+
+                    # Bóc tách Học vấn
+                    if not result["education"]:
+                        m_edu = re.search(r'(?:Từng học tại|Học tại|Studied at|Studies at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                        if m_edu:
+                            result["education"] = m_edu.group(1).strip()
+
+                    # Bóc tách Người theo dõi
+                    if not result["followers"]:
+                        m_fol = re.search(r'Có\s+([\d.,]+)\s+người\s+theo\s+dõi', raw_html, re.IGNORECASE)
+                        if not m_fol:
+                            m_fol = re.search(r'Followed by\s+([\d.,]+)\s+people', raw_html, re.IGNORECASE)
+                        if m_fol:
+                            result["followers"] = m_fol.group(1).replace(".", "").replace(",", "").strip()
+        except Exception as e:
+            logger.warning(f"About Scraper error: {e}")
+
+    # BƯỚC 3: Dự phòng API bên thứ 3 nếu vẫn khuyết trường
+    if not (result["followers"] and result["work"] and result["hometown"]):
+        try:
+            scraper_url = f"https://api.findids.net/api/facebook/profile?id={uid}"
+            async with session.get(scraper_url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                if resp.status == 200:
+                    s_data = await resp.json(content_type=None)
+                    if isinstance(s_data, dict) and s_data.get("data"):
+                        info = s_data["data"]
+                        result["name"] = result.get("name") or info.get("name")
+                        result["followers"] = result.get("followers") or info.get("follower") or info.get("followers")
+                        result["hometown"] = result.get("hometown") or info.get("hometown")
+                        result["location"] = result.get("location") or info.get("location")
+                        result["work"] = result.get("work") or info.get("work")
+                        result["education"] = result.get("education") or info.get("education")
+                        result["about"] = result.get("about") or info.get("bio")
         except Exception:
             pass
 
@@ -302,7 +342,7 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     gender_map = {"male": "Nam 🚹", "female": "Nữ 🚺"}
     gender = gender_map.get(str(raw_gender).lower(), "Không công khai 🔒")
 
-    # Người theo dõi (Followers)
+    # Người theo dõi
     raw_fol = data.get("followers")
     if raw_fol:
         clean_fol = str(raw_fol).replace(",", "").replace(".", "").strip()
@@ -855,7 +895,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
-        await update.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
+        await query.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
 
 
 # Lệnh /getinfo
