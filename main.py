@@ -74,21 +74,18 @@ async def get_http_session() -> aiohttp.ClientSession:
     return HTTP_SESSION
 
 
-# ================= CÁC HÀM XỬ LÝ FACEBOOK =================
+# ================= CÁC HÀM XỬ LÝ FACEBOOK (NÂNG CẤP) =================
 async def get_fb_id(input_str: str) -> str | None:
     """Bóc tách UID Facebook trực tiếp, qua Graph API hoặc các endpoint dự phòng."""
     clean = input_str.strip()
 
-    # 1. Nhập thẳng dãy số UID
     if clean.isdigit():
         return clean
 
-    # 2. Bóc từ link profile.php?id=...
     match_id = re.search(r"[?&]id=(\d+)", clean)
     if match_id:
         return match_id.group(1)
 
-    # 3. Lọc username từ URL thông thường
     username = clean
     clean_url = clean.split("?")[0].rstrip("/")
     path_match = re.search(r"(?:facebook\.com|fb\.me|fb\.com)/([a-zA-Z0-9.]+)", clean_url)
@@ -99,7 +96,6 @@ async def get_fb_id(input_str: str) -> str | None:
 
     session = await get_http_session()
 
-    # 4. Thử truy vấn ID trực tiếp qua Graph API
     for token in FB_TOKENS:
         try:
             fb_graph_url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
@@ -111,7 +107,6 @@ async def get_fb_id(input_str: str) -> str | None:
         except Exception:
             pass
 
-    # 5. Dự phòng qua TraoDoiSub API
     try:
         tds_url = "https://id.traodoisub.com/api.php"
         async with session.post(tds_url, data={"link": clean}, timeout=aiohttp.ClientTimeout(total=8)) as resp:
@@ -122,7 +117,6 @@ async def get_fb_id(input_str: str) -> str | None:
     except Exception:
         pass
 
-    # 6. Dự phòng qua ffb.vn
     try:
         api_url = f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}"
         async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
@@ -137,63 +131,123 @@ async def get_fb_id(input_str: str) -> str | None:
 
 
 async def fetch_fb_info(uid: str) -> dict | None:
-    """Truy vấn thông tin Facebook với cơ chế an toàn tránh lỗi cấm field của Meta."""
+    """Truy vấn full thông tin Facebook bằng cơ chế đa tầng (Progressive Extraction)."""
     session = await get_http_session()
 
-    # Các trường công khai cho phép
-    safe_fields = "id,name,is_verified,subscribers.limit(0).summary(true),locale,gender"
+    # Tầng 1: Full fields mở rộng tối đa (công việc, học vấn, vị trí, tiểu sử, website...)
+    full_fields = (
+        "id,name,first_name,last_name,is_verified,gender,locale,timezone,short_name,"
+        "subscribers.limit(0).summary(true),about,website,quotes,location,hometown,"
+        "birthday,relationship_status,education,work,link"
+    )
+    # Tầng 2: Fields cơ bản an toàn khi trang cá nhân khóa private các trường nhạy cảm
+    safe_fields = "id,name,is_verified,gender,locale,subscribers.limit(0).summary(true),link"
+    # Tầng 3: Tối thiểu
     minimal_fields = "id,name"
 
     for token in FB_TOKENS:
-        # Lần 1: Gọi các trường tiêu chuẩn
+        # Thử Tầng 1 (Full)
         try:
-            url = f"https://graph.facebook.com/v19.0/{uid}?fields={safe_fields}&access_token={token}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            url_full = f"https://graph.facebook.com/v19.0/{uid}?fields={full_fields}&access_token={token}"
+            async with session.get(url_full, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 res = await resp.json(content_type=None)
                 if "id" in res:
                     return res
-                logger.warning(f"FB Graph Error (Safe): {res.get('error', {}).get('message')}")
-        except Exception as e:
-            logger.error(f"FB Fetch Safe Error: {e}")
+        except Exception:
+            pass
 
-        # Lần 2: Hạ cấp xuống trường tối thiểu nếu lần 1 lỗi
+        # Thử Tầng 2 (Safe)
+        try:
+            url_safe = f"https://graph.facebook.com/v19.0/{uid}?fields={safe_fields}&access_token={token}"
+            async with session.get(url_safe, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                res = await resp.json(content_type=None)
+                if "id" in res:
+                    return res
+        except Exception:
+            pass
+
+        # Thử Tầng 3 (Minimal)
         try:
             url_min = f"https://graph.facebook.com/v19.0/{uid}?fields={minimal_fields}&access_token={token}"
             async with session.get(url_min, timeout=aiohttp.ClientTimeout(total=8)) as resp:
                 res = await resp.json(content_type=None)
                 if "id" in res:
                     return res
-                logger.warning(f"FB Graph Error (Minimal): {res.get('error', {}).get('message')}")
-        except Exception as e:
-            logger.error(f"FB Fetch Minimal Error: {e}")
+        except Exception:
+            pass
 
     return None
 
 
 def format_fb_info_panel(data: dict) -> tuple[str, str]:
+    """Bóc tách và định dạng chi tiết toàn bộ các trường thông tin Facebook."""
     uid = data.get("id", "—")
     name = html.escape(str(data.get("name") or "Facebook User"))
-    gender = html.escape(str(data.get("gender") or "N/A")).capitalize()
+    first_name = html.escape(str(data.get("first_name") or "—"))
+    last_name = html.escape(str(data.get("last_name") or "—"))
+    gender = html.escape(str(data.get("gender") or "Không công khai")).capitalize()
+    birthday = html.escape(str(data.get("birthday") or "Không công khai"))
+    relationship = html.escape(str(data.get("relationship_status") or "Không công khai"))
     locale = html.escape(str(data.get("locale") or "N/A"))
+    timezone = str(data.get("timezone") or "N/A")
 
+    hometown = html.escape(str(data.get("hometown", {}).get("name") or "Không công khai"))
+    location = html.escape(str(data.get("location", {}).get("name") or "Không công khai"))
+    about = html.escape(str(data.get("about") or "Không có tiểu sử."))
+    website = html.escape(str(data.get("website") or "Không có"))
+    quotes = html.escape(str(data.get("quotes") or "Không có"))
+
+    # Bóc tách Học vấn (Education)
+    edu_list = []
+    for edu in data.get("education", [])[:2]:
+        school_name = edu.get("school", {}).get("name")
+        edu_type = edu.get("type", "Trường học")
+        if school_name:
+            edu_list.append(f"  • {html.escape(edu_type)}: <b>{html.escape(school_name)}</b>")
+    edu_str = "\n".join(edu_list) if edu_list else "  • Không công khai"
+
+    # Bóc tách Công việc (Work)
+    work_list = []
+    for w in data.get("work", [])[:2]:
+        employer = w.get("employer", {}).get("name")
+        position = w.get("position", {}).get("name")
+        if employer and position:
+            work_list.append(f"  • <b>{html.escape(position)}</b> tại <b>{html.escape(employer)}</b>")
+        elif employer:
+            work_list.append(f"  • Làm việc tại <b>{html.escape(employer)}</b>")
+    work_str = "\n".join(work_list) if work_list else "  • Không công khai"
+
+    # Người theo dõi & Xác minh
     subscribers_data = data.get("subscribers", {}).get("summary", {})
     followers = subscribers_data.get("total_count")
     followers_str = f"{followers:,} followers" if followers is not None else "Ẩn hoặc Không có"
+    verified = "💎 [ĐÃ XÁC MINH - TÍCH XANH]" if data.get("is_verified") else "⚪ [TÀI KHOẢN THƯỜNG]"
 
-    verified = "💎 [TÍCH XANH]" if data.get("is_verified") else "⚪ [THƯỜNG]"
+    # Avatar Facebook độ phân giải lớn
     avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
 
     panel = (
-        f"╔══════════ 👤 <b>HỒ SƠ FACEBOOK</b> ══════════╗\n"
-        f"║ 📛 <b>Họ tên:</b> <b>{name}</b>\n"
+        f"╔══════════ 👤 <b>HỒ SƠ CHI TIẾT FACEBOOK</b> ══════════╗\n"
+        f"║ 📛 <b>Họ tên:</b> <b>{name}</b> (Họ: {last_name} | Tên: {first_name})\n"
         f"║ 🆔 <b>UID:</b> <code>{uid}</code>\n"
         f"║ 🚻 <b>Giới tính:</b> {gender}\n"
-        f"║ 🌐 <b>Ngôn ngữ:</b> {locale}\n"
+        f"║ 🎂 <b>Ngày sinh:</b> {birthday}\n"
+        f"║ 💍 <b>Hôn nhân:</b> {relationship}\n"
+        f"║ 🌐 <b>Ngôn ngữ:</b> {locale} │ <b>Múi giờ:</b> GMT{timezone}\n"
         f"║ 🛡 <b>Xác minh:</b> {verified}\n"
-        f"╠══════════ 📊 <b>CHỈ SỐ TƯƠNG TÁC</b> ══════════╣\n"
+        f"╠══════════ 📍 <b>NƠI Ở & QUÊ QUÁN</b> ══════════╣\n"
+        f"║ 🏡 <b>Quê quán:</b> {hometown}\n"
+        f"║ 📌 <b>Nơi sống:</b> {location}\n"
+        f"╠══════════ 💼 <b>SỰ NGHIỆP & HỌC VẤN</b> ══════════╣\n"
+        f"║ 🎓 <b>Học vấn:</b>\n{edu_str}\n"
+        f"║ 🏢 <b>Công việc:</b>\n{work_str}\n"
+        f"╠══════════ 📊 <b>TƯƠNG TÁC & LIÊN HỆ</b> ══════════╣\n"
         f"║ 👥 <b>Người theo dõi:</b> <code>{followers_str}</code>\n"
-        f"║ 🔗 <b>Trang cá nhân:</b> <a href='https://facebook.com/{uid}'>Bấm để mở Profile</a>\n"
-        f"╚════════════════════════════════════╝"
+        f"║ 🌐 <b>Website:</b> {website}\n"
+        f"║ 📝 <b>Tiểu sử:</b> <i>« {about} »</i>\n"
+        f"║ 💬 <b>Trích dẫn:</b> <i>« {quotes} »</i>\n"
+        f"║ 🔗 <b>Trang cá nhân:</b> <a href='https://facebook.com/{uid}'>facebook.com/{uid}</a>\n"
+        f"╚════════════════════════════════════════════╝"
     )
     return panel, avatar_url
 
@@ -310,7 +364,7 @@ async def fetch_tiktok_user_info(username: str) -> dict:
         return {"error": str(e)}
 
 
-# ================= GIAO DIỆN PANEL ĐỒNG BỘ =================
+# ================= GIAO DIỆN PANEL TIKTOK =================
 def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     if not data or data.get("error"):
         err = data.get("error", "Người dùng không tồn tại hoặc API bận.")
@@ -370,12 +424,12 @@ def build_welcome_dashboard(user_name: str = "Bạn") -> tuple[str, InlineKeyboa
         f"   ⚡ <b>MULTI-PLATFORM AUTOMATION BOT</b> ⚡\n"
         f"╚════════════════════════════════════╝\n\n"
         f"🤖 <b>GIỚI THIỆU HỆ THỐNG:</b>\n"
-        f"Hệ thống đa chức năng hỗ trợ tải media TikTok không logo, tách MP3 và trích xuất hồ sơ TikTok & Facebook trực tiếp.\n\n"
+        f"Hệ thống đa chức năng hỗ trợ tải media TikTok không logo, tách MP3 và trích xuất hồ sơ chi tiết TikTok & Facebook trực tiếp.\n\n"
         f"📌 <b>BỘ LỆNH ĐIỀU KHIỂN:</b>\n"
         f"├ 📥 <b>Tự động tải TikTok:</b> Dán trực tiếp link TikTok vào khung chat.\n"
         f"├ 🎵 <b>Tách Audio MP3:</b> <code>/music &lt;link&gt;</code> lấy track âm thanh.\n"
         f"├ 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;username&gt;</code> phân tích chỉ số.\n"
-        f"└ 🔵 <b>Info Facebook:</b> <code>/fb &lt;link_hoặc_uid&gt;</code> tra cứu hồ sơ FB.\n\n"
+        f"└ 🔵 <b>Info Facebook:</b> <code>/fb &lt;link_hoặc_uid&gt;</code> check full thông tin FB.\n\n"
         f"🟢 <i>Hệ thống trực tuyến 24/7 sẵn sàng hoạt động!</i>"
     )
     keyboard = [
@@ -489,8 +543,8 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "║ • Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
             "║ • Ví dụ: <code>/fb 4</code>\n"
             "║ • Ví dụ: <code>/fb https://facebook.com/zuck</code>\n"
-            "║ 💡 <i>Tự động chuyển đổi link sang UID, kiểm tra tích xanh,</i>\n"
-            "║ <i>ngôn ngữ, số lượng người theo dõi và trang cá nhân.</i>\n"
+            "║ 💡 <i>Bóc tách full thông tin công khai: học vấn, công việc,</i>\n"
+            "║ <i>quê quán, nơi sống, hôn nhân, ngày sinh, follower...</i>\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
@@ -508,7 +562,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "║ 🟢 <b>Fallback Service:</b> LoveTik Ready\n"
             "║ 🟢 <b>Audio Extractor:</b> Online\n"
             "║ 🟢 <b>TikTok Lookup:</b> Online\n"
-            "║ 🟢 <b>Facebook Graph API:</b> Connected\n"
+            "║ 🟢 <b>Facebook Full Graph:</b> Connected\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
@@ -518,7 +572,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
 
-# LỆNH /fb <link_hoặc_uid>
+# LỆNH /fb <link_hoặc_uid> (FULL INFO)
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -541,7 +595,7 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ Không lấy được UID. Vui lòng kiểm tra lại link hoặc định dạng!", parse_mode=ParseMode.HTML)
         return
 
-    await status_msg.edit_text(f"📡 <i>Đang lấy dữ liệu Graph API cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
+    await status_msg.edit_text(f"📡 <i>Đang truy vấn dữ liệu chi tiết cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
     data = await fetch_fb_info(uid)
 
     if not data:
