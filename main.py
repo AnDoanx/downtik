@@ -31,6 +31,11 @@ ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn private, để tr�
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
+# Facebook Graph API & Tokens
+FB_TOKENS = [
+    "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
+]
+
 # Banner Images theo từng tác vụ
 IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
 IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
@@ -51,7 +56,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
     level=logging.INFO,
 )
-logger = logging.getLogger("TikTokMasterBot")
+logger = logging.getLogger("MultiToolBot")
 
 HTTP_SESSION: aiohttp.ClientSession | None = None
 
@@ -67,6 +72,80 @@ async def get_http_session() -> aiohttp.ClientSession:
     if HTTP_SESSION is None or HTTP_SESSION.closed:
         HTTP_SESSION = aiohttp.ClientSession(headers=TIK_HEADERS)
     return HTTP_SESSION
+
+
+# ================= CÁC HÀM XỬ LÝ FACEBOOK =================
+async def get_fb_id(input_str: str) -> str | None:
+    """Chuyển đổi Link Facebook thành UID số qua API ffb.vn."""
+    clean = input_str.strip()
+    if clean.isdigit():
+        return clean
+
+    session = await get_http_session()
+    try:
+        api_url = f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}"
+        async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+            if resp.status == 200:
+                data = await resp.json(content_type=None)
+                return str(data.get("id")) if data.get("id") else None
+    except Exception as e:
+        logger.error(f"FFB get ID error: {e}")
+    return None
+
+
+async def fetch_fb_info(uid: str) -> dict | None:
+    """Truy vấn thông tin tài khoản Facebook từ Graph API."""
+    session = await get_http_session()
+    fields = "id,is_verified,name,created_time,birthday,gender,relationship_status,subscribers.limit(0).summary(true),hometown,location,locale,timezone"
+
+    for token in FB_TOKENS:
+        try:
+            url = f"https://graph.facebook.com/{uid}?fields={fields}&access_token={token}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                res = await resp.json(content_type=None)
+                if "id" in res:
+                    return res
+                elif "error" in res:
+                    logger.warning(f"Lỗi FB Token: {res['error'].get('message')}")
+        except Exception as e:
+            logger.error(f"Fetch FB Info Error: {e}")
+            continue
+    return None
+
+
+def format_fb_info_panel(data: dict) -> tuple[str, str]:
+    uid = data.get("id", "—")
+    name = html.escape(str(data.get("name") or "Không rõ"))
+    gender = html.escape(str(data.get("gender") or "N/A")).capitalize()
+    birthday = html.escape(str(data.get("birthday") or "Không công khai"))
+    relationship = html.escape(str(data.get("relationship_status") or "Không công khai"))
+    hometown = html.escape(str(data.get("hometown", {}).get("name") or "Không công khai"))
+    location = html.escape(str(data.get("location", {}).get("name") or "Không công khai"))
+
+    followers = data.get("subscribers", {}).get("summary", {}).get("total_count", 0)
+    created = str(data.get("created_time") or "Không công khai").replace("T", " | ").split("+")[0]
+    verified = "💎 [TÍCH XANH]" if data.get("is_verified") else "⚪ [THƯỜNG]"
+
+    avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
+
+    panel = (
+        f"╔══════════ 👤 <b>HỒ SƠ FACEBOOK</b> ══════════╗\n"
+        f"║ 📛 <b>Họ tên:</b> <b>{name}</b>\n"
+        f"║ 🆔 <b>UID:</b> <code>{uid}</code>\n"
+        f"║ 🚻 <b>Giới tính:</b> {gender}\n"
+        f"║ 🎂 <b>Ngày sinh:</b> {birthday}\n"
+        f"║ 💍 <b>Mối quan hệ:</b> {relationship}\n"
+        f"║ 🛡 <b>Xác minh:</b> {verified}\n"
+        f"╠══════════ 🌍 <b>VỊ TRÍ & NGUỒN GỐC</b> ══════════╣\n"
+        f"║ 🏡 <b>Quê quán:</b> {hometown}\n"
+        f"║ 📍 <b>Hiện sống tại:</b> {location}\n"
+        f"╠══════════ 📊 <b>CHỈ SỐ TƯƠNG TÁC</b> ══════════╣\n"
+        f"║ 👥 <b>Người theo dõi:</b> <code>{followers:,}</code> followers\n"
+        f"║ 🕒 <b>Ngày tham gia:</b> {created}\n"
+        f"║ 🔗 <b>Trang cá nhân:</b> <a href='https://facebook.com/{uid}'>Bấm để xem</a>\n"
+        f"╚════════════════════════════════════╝"
+    )
+    return panel, avatar_url
 
 
 # ================= GIẢI NÉN LINK RÚT GỌN =================
@@ -214,7 +293,7 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
 
     panel = (
-        f"╔══════════ 👤 <b>HỒ SƠ NGƯỜI DÙNG</b> ══════════╗\n"
+        f"╔══════════ 👤 <b>HỒ SƠ TIKTOK</b> ══════════╗\n"
         f"║ 📛 <b>Tên:</b> <b>{nickname}</b>\n"
         f"║ 🆔 <b>ID:</b> <code>@{unique_id}</code>\n"
         f"║ 🔢 <b>Mã UID:</b> <code>{uid}</code>\n"
@@ -238,15 +317,16 @@ def build_welcome_dashboard(user_name: str = "Bạn") -> tuple[str, InlineKeyboa
     text = (
         f"╔════════════════════════════════════╗\n"
         f"   👋 <b>WELCOME, {html.escape(user_name).upper()}!</b>\n"
-        f"   ⚡ <b>TIKTOK ULTRA AUTOMATION BOT</b> ⚡\n"
+        f"   ⚡ <b>MULTI-PLATFORM AUTOMATION BOT</b> ⚡\n"
         f"╚════════════════════════════════════╝\n\n"
         f"🤖 <b>GIỚI THIỆU HỆ THỐNG:</b>\n"
-        f"Hệ thống đa nhiệm chuyên xử lý, phân tích và trích xuất dữ liệu đa phương tiện từ TikTok tốc độ cao, không watermark.\n\n"
-        f"📌 <b>BỘ LỆNH & TÍNH NĂNG CHÍNH:</b>\n"
-        f"├ 📥 <b>Tự động tải:</b> Gửi trực tiếp link TikTok để tải Video HD / Album ảnh.\n"
-        f"├ 🎵 <b>Tách Audio MP3:</b> <code>/music &lt;link&gt;</code> lấy track âm thanh gốc.\n"
-        f"└ 🔎 <b>Tra cứu User:</b> <code>/getinfo &lt;username&gt;</code> xem thông số UID & kênh.\n\n"
-        f"🟢 <i>Hệ thống trực tuyến 24/7 sẵn sàng phục vụ!</i>"
+        f"Hệ thống đa chức năng hỗ trợ tải media TikTok không logo, tách MP3 và trích xuất hồ sơ TikTok & Facebook trực tiếp.\n\n"
+        f"📌 <b>BỘ LỆNH ĐIỀU KHIỂN:</b>\n"
+        f"├ 📥 <b>Tự động tải TikTok:</b> Dán trực tiếp link TikTok vào khung chat.\n"
+        f"├ 🎵 <b>Tách Audio MP3:</b> <code>/music &lt;link&gt;</code> lấy track âm thanh.\n"
+        f"├ 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;username&gt;</code> phân tích chỉ số.\n"
+        f"└ 🔵 <b>Info Facebook:</b> <code>/fb &lt;link_hoặc_uid&gt;</code> tra cứu hồ sơ FB.\n\n"
+        f"🟢 <i>Hệ thống trực tuyến 24/7 sẵn sàng hoạt động!</i>"
     )
     keyboard = [
         [
@@ -254,7 +334,10 @@ def build_welcome_dashboard(user_name: str = "Bạn") -> tuple[str, InlineKeyboa
             InlineKeyboardButton("🎵 Hướng Dẫn Audio", callback_data="panel_guide_music"),
         ],
         [
-            InlineKeyboardButton("🔎 Hướng Dẫn GetInfo", callback_data="panel_guide_info"),
+            InlineKeyboardButton("🔎 Info TikTok", callback_data="panel_guide_info"),
+            InlineKeyboardButton("🔵 Info Facebook", callback_data="panel_guide_fb"),
+        ],
+        [
             InlineKeyboardButton("📡 Server Status", callback_data="panel_status"),
         ],
     ]
@@ -308,7 +391,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "║\n"
             "║ 1️⃣ Sao chép link video hoặc slide ảnh trên TikTok.\n"
             "║ 2️⃣ Dán trực tiếp link vào khung chat này.\n"
-            "║ 3️⃣ Bot tự động tải về tệp không dính logo/watermark.\n"
+            "║ 3️⃣ Bot tự động tải về tệp không dính watermark.\n"
             "║ 💡 <i>Hỗ trợ cả link rút gọn dạng vt.tiktok.com</i>\n"
             "║\n"
             "╚════════════════════════════════════╝"
@@ -336,11 +419,28 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_info":
         text = (
-            "╔══════ 🔎 <b>HƯỚNG DẪN TRA CỨU USER</b> ══════╗\n"
+            "╔══════ 🔎 <b>HƯỚNG DẪN INFO TIKTOK</b> ══════╗\n"
             "║\n"
             "║ • Cú pháp: <code>/getinfo &lt;username&gt;</code>\n"
             "║ • Ví dụ: <code>/getinfo tiktok</code>\n"
-            "║ 💡 <i>Hệ thống bóc tách số UID, tym, follower và avatar full HD.</i>\n"
+            "║ 💡 <i>Bóc tách số UID, tym, follower và ảnh đại diện.</i>\n"
+            "║\n"
+            "╚════════════════════════════════════╝"
+        )
+        try:
+            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        except Exception:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+
+    elif data == "panel_guide_fb":
+        text = (
+            "╔══════ 🔵 <b>HƯỚNG DẪN CHECK FACEBOOK</b> ══════╗\n"
+            "║\n"
+            "║ • Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
+            "║ • Ví dụ: <code>/fb 4</code>\n"
+            "║ • Ví dụ: <code>/fb https://facebook.com/zuck</code>\n"
+            "║ 💡 <i>Tự động chuyển đổi link sang UID, bóc tách sinh nhật,</i>\n"
+            "║ <i>mối quan hệ, quê quán và ngày tạo tài khoản.</i>\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
@@ -357,7 +457,8 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "║ 🟢 <b>TikWM Service:</b> Connected\n"
             "║ 🟢 <b>Fallback Service:</b> LoveTik Ready\n"
             "║ 🟢 <b>Audio Extractor:</b> Online\n"
-            "║ 🟢 <b>User Lookup:</b> Online\n"
+            "║ 🟢 <b>TikTok Lookup:</b> Online\n"
+            "║ 🟢 <b>Facebook Graph API:</b> Connected\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
@@ -365,6 +466,45 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
         except Exception:
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+
+
+# LỆNH /fb <link_hoặc_uid>
+async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+
+    if not context.args:
+        help_panel = (
+            f"╔════════ ⚠️ <b>THIẾU THAM SỐ</b> ════════╗\n"
+            f"║ 📌 <b>Cú pháp:</b> <code>/fb &lt;link_hoặc_uid&gt;</code>\n"
+            f"║ 💡 <i>Ví dụ: <code>/fb 4</code> hoặc <code>/fb https://facebook.com/...</code></i>\n"
+            f"╚════════════════════════════════════╝"
+        )
+        await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
+        return
+
+    input_data = context.args[0].strip()
+    status_msg = await update.message.reply_text("⏳ <i>Đang bóc tách UID Facebook...</i>", parse_mode=ParseMode.HTML)
+
+    uid = await get_fb_id(input_data)
+    if not uid:
+        await status_msg.edit_text("❌ Không lấy được UID. Vui lòng kiểm tra lại link hoặc định dạng!", parse_mode=ParseMode.HTML)
+        return
+
+    await status_msg.edit_text(f"📡 <i>Đang lấy dữ liệu Graph API cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
+    data = await fetch_fb_info(uid)
+
+    if not data:
+        await status_msg.edit_text("❌ Không tìm thấy thông tin hoặc Token Facebook đã hết hạn.", parse_mode=ParseMode.HTML)
+        return
+
+    report, avatar_url = format_fb_info_panel(data)
+    await status_msg.delete()
+
+    try:
+        await update.message.reply_photo(photo=avatar_url, caption=report, parse_mode=ParseMode.HTML)
+    except Exception:
+        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
 # Nút callback tải nhạc dưới video
@@ -601,9 +741,9 @@ def main():
     terminal_banner = (
         "\n"
         "╔══════════════════════════════════════════════════════╗\n"
-        "║            TIKTOK ULTRA TOOLKIT ONLINE               ║\n"
+        "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║          Engine: python-telegram-bot v20+            ║\n"
-        "║        Commands: /getinfo, /music & Auto-Down        ║\n"
+        "║        Features: TikTok Auto-Down, Music & FB        ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -616,6 +756,7 @@ def main():
     app.add_handler(CommandHandler("getinfo", cmd_getinfo))
     app.add_handler(CommandHandler("music", cmd_music))
     app.add_handler(CommandHandler("downmusic", cmd_music))
+    app.add_handler(CommandHandler("fb", cmd_fb))
 
     # Callbacks tương tác Panel & Download Audio
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
