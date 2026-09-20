@@ -76,20 +76,63 @@ async def get_http_session() -> aiohttp.ClientSession:
 
 # ================= CÁC HÀM XỬ LÝ FACEBOOK =================
 async def get_fb_id(input_str: str) -> str | None:
-    """Chuyển đổi Link Facebook thành UID số qua API ffb.vn."""
+    """Bóc tách UID Facebook trực tiếp, qua Graph API hoặc các endpoint dự phòng."""
     clean = input_str.strip()
+
+    # 1. Nếu người dùng nhập thẳng dãy số UID
     if clean.isdigit():
         return clean
 
+    # 2. Bóc nhanh từ link dạng: facebook.com/profile.php?id=1000xxxx
+    match_id = re.search(r"[?&]id=(\d+)", clean)
+    if match_id:
+        return match_id.group(1)
+
+    # 3. Lọc lấy username từ các dạng link profile thông thường
+    username = clean
+    clean_url = clean.split("?")[0].rstrip("/")
+    path_match = re.search(r"(?:facebook\.com|fb\.me|fb\.com)/([a-zA-Z0-9.]+)", clean_url)
+    if path_match:
+        extracted = path_match.group(1)
+        if extracted not in ["profile.php", "groups", "pages", "watch", "stories"]:
+            username = extracted
+
     session = await get_http_session()
+
+    # 4. Truy vấn trực tiếp Graph API bằng Access Token hiện tại
+    for token in FB_TOKENS:
+        try:
+            fb_graph_url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
+            async with session.get(fb_graph_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status == 200:
+                    res = await resp.json(content_type=None)
+                    if "id" in res:
+                        return str(res["id"])
+        except Exception:
+            pass
+
+    # 5. Dự phòng API 1: id.traodoisub.com
     try:
-        api_url = f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}"
-        async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+        tds_url = "https://id.traodoisub.com/api.php"
+        async with session.post(tds_url, data={"link": clean}, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 data = await resp.json(content_type=None)
-                return str(data.get("id")) if data.get("id") else None
+                if data.get("id"):
+                    return str(data["id"])
+    except Exception:
+        pass
+
+    # 6. Dự phòng API 2: ffb.vn
+    try:
+        api_url = f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}"
+        async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            if resp.status == 200:
+                data = await resp.json(content_type=None)
+                if data.get("id"):
+                    return str(data["id"])
     except Exception as e:
-        logger.error(f"FFB get ID error: {e}")
+        logger.error(f"FFB Error: {e}")
+
     return None
 
 
@@ -148,7 +191,7 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     return panel, avatar_url
 
 
-# ================= GIẢI NÉN LINK RÚT GỌN =================
+# ================= GIẢI NÉN LINK RÚT GỌN TIKTOK =================
 async def resolve_tiktok_url(url: str) -> str:
     session = await get_http_session()
     clean = url.strip()
@@ -743,7 +786,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║          Engine: python-telegram-bot v20+            ║\n"
-        "║        Features: TikTok Auto-Down, Music & FB        ║\n"
+        "║      Features: TikTok Auto-Down, Music & FB Info     ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
