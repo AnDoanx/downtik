@@ -79,16 +79,16 @@ async def get_fb_id(input_str: str) -> str | None:
     """Bóc tách UID Facebook trực tiếp, qua Graph API hoặc các endpoint dự phòng."""
     clean = input_str.strip()
 
-    # 1. Nếu người dùng nhập thẳng dãy số UID
+    # 1. Nhập thẳng dãy số UID
     if clean.isdigit():
         return clean
 
-    # 2. Bóc nhanh từ link dạng: facebook.com/profile.php?id=1000xxxx
+    # 2. Bóc từ link profile.php?id=...
     match_id = re.search(r"[?&]id=(\d+)", clean)
     if match_id:
         return match_id.group(1)
 
-    # 3. Lọc lấy username từ các dạng link profile thông thường
+    # 3. Lọc username từ URL thông thường
     username = clean
     clean_url = clean.split("?")[0].rstrip("/")
     path_match = re.search(r"(?:facebook\.com|fb\.me|fb\.com)/([a-zA-Z0-9.]+)", clean_url)
@@ -99,7 +99,7 @@ async def get_fb_id(input_str: str) -> str | None:
 
     session = await get_http_session()
 
-    # 4. Truy vấn trực tiếp Graph API bằng Access Token hiện tại
+    # 4. Thử truy vấn ID trực tiếp qua Graph API
     for token in FB_TOKENS:
         try:
             fb_graph_url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
@@ -111,7 +111,7 @@ async def get_fb_id(input_str: str) -> str | None:
         except Exception:
             pass
 
-    # 5. Dự phòng API 1: id.traodoisub.com
+    # 5. Dự phòng qua TraoDoiSub API
     try:
         tds_url = "https://id.traodoisub.com/api.php"
         async with session.post(tds_url, data={"link": clean}, timeout=aiohttp.ClientTimeout(total=8)) as resp:
@@ -122,7 +122,7 @@ async def get_fb_id(input_str: str) -> str | None:
     except Exception:
         pass
 
-    # 6. Dự phòng API 2: ffb.vn
+    # 6. Dự phòng qua ffb.vn
     try:
         api_url = f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}"
         async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
@@ -137,38 +137,50 @@ async def get_fb_id(input_str: str) -> str | None:
 
 
 async def fetch_fb_info(uid: str) -> dict | None:
-    """Truy vấn thông tin tài khoản Facebook từ Graph API."""
+    """Truy vấn thông tin Facebook với cơ chế an toàn tránh lỗi cấm field của Meta."""
     session = await get_http_session()
-    fields = "id,is_verified,name,created_time,birthday,gender,relationship_status,subscribers.limit(0).summary(true),hometown,location,locale,timezone"
+
+    # Các trường công khai cho phép
+    safe_fields = "id,name,is_verified,subscribers.limit(0).summary(true),locale,gender"
+    minimal_fields = "id,name"
 
     for token in FB_TOKENS:
+        # Lần 1: Gọi các trường tiêu chuẩn
         try:
-            url = f"https://graph.facebook.com/{uid}?fields={fields}&access_token={token}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+            url = f"https://graph.facebook.com/v19.0/{uid}?fields={safe_fields}&access_token={token}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 res = await resp.json(content_type=None)
                 if "id" in res:
                     return res
-                elif "error" in res:
-                    logger.warning(f"Lỗi FB Token: {res['error'].get('message')}")
+                logger.warning(f"FB Graph Error (Safe): {res.get('error', {}).get('message')}")
         except Exception as e:
-            logger.error(f"Fetch FB Info Error: {e}")
-            continue
+            logger.error(f"FB Fetch Safe Error: {e}")
+
+        # Lần 2: Hạ cấp xuống trường tối thiểu nếu lần 1 lỗi
+        try:
+            url_min = f"https://graph.facebook.com/v19.0/{uid}?fields={minimal_fields}&access_token={token}"
+            async with session.get(url_min, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                res = await resp.json(content_type=None)
+                if "id" in res:
+                    return res
+                logger.warning(f"FB Graph Error (Minimal): {res.get('error', {}).get('message')}")
+        except Exception as e:
+            logger.error(f"FB Fetch Minimal Error: {e}")
+
     return None
 
 
 def format_fb_info_panel(data: dict) -> tuple[str, str]:
     uid = data.get("id", "—")
-    name = html.escape(str(data.get("name") or "Không rõ"))
+    name = html.escape(str(data.get("name") or "Facebook User"))
     gender = html.escape(str(data.get("gender") or "N/A")).capitalize()
-    birthday = html.escape(str(data.get("birthday") or "Không công khai"))
-    relationship = html.escape(str(data.get("relationship_status") or "Không công khai"))
-    hometown = html.escape(str(data.get("hometown", {}).get("name") or "Không công khai"))
-    location = html.escape(str(data.get("location", {}).get("name") or "Không công khai"))
+    locale = html.escape(str(data.get("locale") or "N/A"))
 
-    followers = data.get("subscribers", {}).get("summary", {}).get("total_count", 0)
-    created = str(data.get("created_time") or "Không công khai").replace("T", " | ").split("+")[0]
+    subscribers_data = data.get("subscribers", {}).get("summary", {})
+    followers = subscribers_data.get("total_count")
+    followers_str = f"{followers:,} followers" if followers is not None else "Ẩn hoặc Không có"
+
     verified = "💎 [TÍCH XANH]" if data.get("is_verified") else "⚪ [THƯỜNG]"
-
     avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
 
     panel = (
@@ -176,16 +188,11 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         f"║ 📛 <b>Họ tên:</b> <b>{name}</b>\n"
         f"║ 🆔 <b>UID:</b> <code>{uid}</code>\n"
         f"║ 🚻 <b>Giới tính:</b> {gender}\n"
-        f"║ 🎂 <b>Ngày sinh:</b> {birthday}\n"
-        f"║ 💍 <b>Mối quan hệ:</b> {relationship}\n"
+        f"║ 🌐 <b>Ngôn ngữ:</b> {locale}\n"
         f"║ 🛡 <b>Xác minh:</b> {verified}\n"
-        f"╠══════════ 🌍 <b>VỊ TRÍ & NGUỒN GỐC</b> ══════════╣\n"
-        f"║ 🏡 <b>Quê quán:</b> {hometown}\n"
-        f"║ 📍 <b>Hiện sống tại:</b> {location}\n"
         f"╠══════════ 📊 <b>CHỈ SỐ TƯƠNG TÁC</b> ══════════╣\n"
-        f"║ 👥 <b>Người theo dõi:</b> <code>{followers:,}</code> followers\n"
-        f"║ 🕒 <b>Ngày tham gia:</b> {created}\n"
-        f"║ 🔗 <b>Trang cá nhân:</b> <a href='https://facebook.com/{uid}'>Bấm để xem</a>\n"
+        f"║ 👥 <b>Người theo dõi:</b> <code>{followers_str}</code>\n"
+        f"║ 🔗 <b>Trang cá nhân:</b> <a href='https://facebook.com/{uid}'>Bấm để mở Profile</a>\n"
         f"╚════════════════════════════════════╝"
     )
     return panel, avatar_url
@@ -482,8 +489,8 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "║ • Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
             "║ • Ví dụ: <code>/fb 4</code>\n"
             "║ • Ví dụ: <code>/fb https://facebook.com/zuck</code>\n"
-            "║ 💡 <i>Tự động chuyển đổi link sang UID, bóc tách sinh nhật,</i>\n"
-            "║ <i>mối quan hệ, quê quán và ngày tạo tài khoản.</i>\n"
+            "║ 💡 <i>Tự động chuyển đổi link sang UID, kiểm tra tích xanh,</i>\n"
+            "║ <i>ngôn ngữ, số lượng người theo dõi và trang cá nhân.</i>\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
