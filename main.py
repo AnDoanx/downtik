@@ -31,6 +31,12 @@ ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn private, để tr�
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
+# Banner Images theo từng tác vụ
+IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
+IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
+IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
+IMG_DOWN = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png"
+
 TIK_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -65,7 +71,6 @@ async def get_http_session() -> aiohttp.ClientSession:
 
 # ================= GIẢI NÉN LINK RÚT GỌN =================
 async def resolve_tiktok_url(url: str) -> str:
-    """Tự động follow redirect của link vt.tiktok.com hoặc vm.tiktok.com."""
     session = await get_http_session()
     clean = url.strip()
     if "vt.tiktok.com" in clean or "vm.tiktok.com" in clean:
@@ -92,7 +97,6 @@ async def tikwm_req(endpoint: str = "", params: dict = None):
         "X-Requested-With": "XMLHttpRequest",
     }
 
-    # Cách 1: POST form-urlencoded (Chuẩn nhất cho TikWM)
     try:
         async with session.post(url, data=params or {}, headers=post_headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
@@ -102,7 +106,6 @@ async def tikwm_req(endpoint: str = "", params: dict = None):
     except Exception as e:
         logger.warning(f"TikWM POST fail: {e}")
 
-    # Cách 2: Fallback qua GET params
     try:
         async with session.get(url, params=params or {}, headers=TIK_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
@@ -116,7 +119,6 @@ async def tikwm_req(endpoint: str = "", params: dict = None):
 
 
 async def fallback_tik_download(tiktok_url: str):
-    """API phụ (LoveTik) tự động kích hoạt khi TikWM bị nghẽn hoặc chặn IP."""
     session = await get_http_session()
     api_url = "https://lovetik.com/api/ajax/search"
     payload = {"query": tiktok_url}
@@ -182,10 +184,10 @@ async def fetch_tiktok_user_info(username: str) -> dict:
 # ================= GIAO DIỆN PANEL ĐỒNG BỘ =================
 def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     if not data or data.get("error"):
-        err = data.get("error", "Người dùng không tồn tại hoặc API lỗi.")
+        err = data.get("error", "Người dùng không tồn tại hoặc API bận.")
         return (
             f"╔════════ ❌ <b>TRA CỨU THẤT BẠI</b> ════════╗\n"
-            f"║ 🎯 <b>Target:</b> <code>@{html.escape(username)}</code>\n"
+            f"║ 🎯 <b>Mục tiêu:</b> <code>@{html.escape(username)}</code>\n"
             f"║ ⚠️ <b>Chi tiết:</b> <i>{html.escape(str(err))}</i>\n"
             f"╚════════════════════════════════════╝",
             None,
@@ -212,18 +214,18 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
 
     panel = (
-        f"╔══════════ 👤 <b>USER PROFILE</b> ══════════╗\n"
-        f"║ 📛 <b>Nickname:</b> <b>{nickname}</b>\n"
-        f"║ 🆔 <b>Username:</b> <code>@{unique_id}</code>\n"
+        f"╔══════════ 👤 <b>HỒ SƠ NGƯỜI DÙNG</b> ══════════╗\n"
+        f"║ 📛 <b>Tên:</b> <b>{nickname}</b>\n"
+        f"║ 🆔 <b>ID:</b> <code>@{unique_id}</code>\n"
         f"║ 🔢 <b>Mã UID:</b> <code>{uid}</code>\n"
         f"║ 🌍 <b>Khu vực:</b> <code>{region}</code>\n"
-        f"║ 🛡 <b>Xác thực:</b> {verified_badge} │ {private_badge}\n"
-        f"╠══════════ 📊 <b>CHỈ SỐ PHÂN TÍCH</b> ══════════╣\n"
+        f"║ 🛡 <b>Trạng thái:</b> {verified_badge} │ {private_badge}\n"
+        f"╠══════════ 📊 <b>CHỈ SỐ TƯƠNG TÁC</b> ══════════╣\n"
         f"║ 👥 <b>Followers:</b> <code>{followers:,}</code>\n"
         f"║ 👣 <b>Following:</b> <code>{following:,}</code>\n"
-        f"║ ❤️ <b>Lượt thích:</b> <code>{hearts:,}</code>\n"
-        f"║ 🎬 <b>Tổng Video:</b> <code>{videos:,}</code>\n"
-        f"║ 👍 <b>Đã thích:</b> <code>{diggs:,}</code>\n"
+        f"║ ❤️ <b>Tổng Tym:</b> <code>{hearts:,}</code>\n"
+        f"║ 🎬 <b>Video đã đăng:</b> <code>{videos:,}</code>\n"
+        f"║ 👍 <b>Đã thả tim:</b> <code>{diggs:,}</code>\n"
         f"╠══════════ 📝 <b>TIỂU SỬ KÊNH</b> ══════════╣\n"
         f"║ <i>« {bio} »</i>\n"
         f"╚════════════════════════════════════╝"
@@ -232,26 +234,27 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     return panel, avatar
 
 
-def build_main_dashboard() -> tuple[str, InlineKeyboardMarkup]:
+def build_welcome_dashboard(user_name: str = "Bạn") -> tuple[str, InlineKeyboardMarkup]:
     text = (
-        "╔════════════════════════════════════╗\n"
-        "║      ⚡ <b>TIKTOK ULTRA TOOLKIT</b> ⚡       ║\n"
-        "║     <i>Professional Audio & Media Suite</i>     ║\n"
-        "╚════════════════════════════════════╝\n\n"
-        "🟢 <b>Trạng thái:</b> <code>ONLINE (Ready)</code>\n\n"
-        "💎 <b>CÁC TÍNH NĂNG CHÍNH:</b>\n"
-        "├ 📥 <b>Auto Downloader:</b> Gửi trực tiếp link TikTok để tải Video HD / Album ảnh không logo.\n"
-        "├ 🎵 <b>Trích xuất Audio:</b> <code>/music &lt;link&gt;</code> tách nhạc MP3 âm thanh gốc.\n"
-        "└ 🔎 <b>Tra cứu User:</b> <code>/getinfo &lt;username&gt;</code> phân tích số liệu kênh.\n\n"
-        "👇 <i>Chọn danh mục điều hướng bên dưới để xem chi tiết:</i>"
+        f"╔════════════════════════════════════╗\n"
+        f"   👋 <b>WELCOME, {html.escape(user_name).upper()}!</b>\n"
+        f"   ⚡ <b>TIKTOK ULTRA AUTOMATION BOT</b> ⚡\n"
+        f"╚════════════════════════════════════╝\n\n"
+        f"🤖 <b>GIỚI THIỆU HỆ THỐNG:</b>\n"
+        f"Hệ thống đa nhiệm chuyên xử lý, phân tích và trích xuất dữ liệu đa phương tiện từ TikTok tốc độ cao, không watermark.\n\n"
+        f"📌 <b>BỘ LỆNH & TÍNH NĂNG CHÍNH:</b>\n"
+        f"├ 📥 <b>Tự động tải:</b> Gửi trực tiếp link TikTok để tải Video HD / Album ảnh.\n"
+        f"├ 🎵 <b>Tách Audio MP3:</b> <code>/music &lt;link&gt;</code> lấy track âm thanh gốc.\n"
+        f"└ 🔎 <b>Tra cứu User:</b> <code>/getinfo &lt;username&gt;</code> xem thông số UID & kênh.\n\n"
+        f"🟢 <i>Hệ thống trực tuyến 24/7 sẵn sàng phục vụ!</i>"
     )
     keyboard = [
         [
             InlineKeyboardButton("📥 Hướng Dẫn Tải", callback_data="panel_guide_down"),
-            InlineKeyboardButton("🎵 Hướng Dẫn Tách Nhạc", callback_data="panel_guide_music"),
+            InlineKeyboardButton("🎵 Hướng Dẫn Audio", callback_data="panel_guide_music"),
         ],
         [
-            InlineKeyboardButton("🔎 Tra Cứu User", callback_data="panel_guide_info"),
+            InlineKeyboardButton("🔎 Hướng Dẫn GetInfo", callback_data="panel_guide_info"),
             InlineKeyboardButton("📡 Server Status", callback_data="panel_status"),
         ],
     ]
@@ -262,11 +265,26 @@ def build_main_dashboard() -> tuple[str, InlineKeyboardMarkup]:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
-    text, reply_markup = build_main_dashboard()
+
+    user_name = update.effective_user.first_name or "Bạn"
+    text, reply_markup = build_welcome_dashboard(user_name)
+
     if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        try:
+            await update.message.reply_photo(
+                photo=IMG_WELCOME,
+                caption=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     elif update.callback_query:
-        await update.callback_query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        await update.callback_query.message.edit_caption(
+            caption=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+        )
 
 
 async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -274,24 +292,31 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     data = query.data
 
-    back_btn = [[InlineKeyboardButton("⬅️ Quay lại Dashboard Chính", callback_data="panel_home")]]
+    back_btn = [[InlineKeyboardButton("⬅️ Quay lại Menu Chính", callback_data="panel_home")]]
 
     if data == "panel_home":
-        text, reply_markup = build_main_dashboard()
-        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        user_name = query.from_user.first_name or "Bạn"
+        text, reply_markup = build_welcome_dashboard(user_name)
+        try:
+            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        except Exception:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
     elif data == "panel_guide_down":
         text = (
             "╔══════ 📥 <b>HƯỚNG DẪN TẢI VIDEO & ALBUM</b> ══════╗\n"
             "║\n"
-            "║ 1️⃣ Sao chép liên kết video hoặc slide ảnh trên TikTok.\n"
-            "║ 2️⃣ Gửi thẳng link vào khung chat này.\n"
-            "║ 3️⃣ Bot tự xử lý và trả về video chất lượng gốc không watermark.\n"
+            "║ 1️⃣ Sao chép link video hoặc slide ảnh trên TikTok.\n"
+            "║ 2️⃣ Dán trực tiếp link vào khung chat này.\n"
+            "║ 3️⃣ Bot tự động tải về tệp không dính logo/watermark.\n"
             "║ 💡 <i>Hỗ trợ cả link rút gọn dạng vt.tiktok.com</i>\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
-        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        try:
+            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        except Exception:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_guide_music":
         text = (
@@ -300,11 +325,14 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "║ • Cú pháp: <code>/music &lt;link_tiktok&gt;</code>\n"
             "║ • Hoặc bấm trực tiếp nút <b>[🎵 Tải nhạc MP3]</b> bên dưới\n"
             "║   mỗi video mà bot vừa tải về.\n"
-            "║ 💡 <i>Trích xuất âm thanh gốc 320kbps rõ ràng.</i>\n"
+            "║ 💡 <i>Trích xuất âm thanh gốc 320kbps sắc nét.</i>\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
-        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        try:
+            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        except Exception:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_guide_info":
         text = (
@@ -312,25 +340,31 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "║\n"
             "║ • Cú pháp: <code>/getinfo &lt;username&gt;</code>\n"
             "║ • Ví dụ: <code>/getinfo tiktok</code>\n"
-            "║ 💡 <i>Xem thông tin UID, tổng view, tym, follower và avatar chất lượng cao.</i>\n"
+            "║ 💡 <i>Hệ thống bóc tách số UID, tym, follower và avatar full HD.</i>\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
-        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        try:
+            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        except Exception:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_status":
         text = (
-            "╔══════ 📡 <b>HỆ THỐNG MÁY CHỦ BOT</b> ══════╗\n"
+            "╔══════ 📡 <b>TRẠNG THÁI MÁY CHỦ BOT</b> ══════╗\n"
             "║\n"
             "║ 🟢 <b>Core Engine:</b> Python AsyncIO\n"
             "║ 🟢 <b>TikWM Service:</b> Connected\n"
             "║ 🟢 <b>Fallback Service:</b> LoveTik Ready\n"
-            "║ 🟢 <b>Audio Extractor:</b> Active\n"
-            "║ 🟢 <b>User Lookup:</b> Active\n"
+            "║ 🟢 <b>Audio Extractor:</b> Online\n"
+            "║ 🟢 <b>User Lookup:</b> Online\n"
             "║\n"
             "╚════════════════════════════════════╝"
         )
-        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        try:
+            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        except Exception:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
 
 # Nút callback tải nhạc dưới video
@@ -394,7 +428,10 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"║ 💡 <i>Ví dụ: <code>/music https://vt.tiktok.com/...</code></i>\n"
             f"╚════════════════════════════════════╝"
         )
-        await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
+        try:
+            await update.message.reply_photo(photo=IMG_MUSIC, caption=help_panel, parse_mode=ParseMode.HTML)
+        except Exception:
+            await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
         return
 
     raw_url = context.args[0].strip()
@@ -404,11 +441,9 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("⏳ <i>Đang bóc tách file âm thanh...</i>", parse_mode=ParseMode.HTML)
 
-    # 1. Resolve redirect
     target_url = await resolve_tiktok_url(raw_url)
     clean_url = target_url.split("?")[0] if "vt.tiktok.com" not in target_url else target_url
 
-    # 2. Lấy dữ liệu qua TikWM hoặc Fallback
     data = await tikwm_req("", {"url": clean_url})
     if not data or data.get("code") != 0:
         data = await fallback_tik_download(clean_url)
@@ -462,7 +497,10 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"║ 💡 <i>Ví dụ: <code>/getinfo tiktok</code></i>\n"
             f"╚════════════════════════════════════╝"
         )
-        await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
+        try:
+            await update.message.reply_photo(photo=IMG_GETINFO, caption=help_panel, parse_mode=ParseMode.HTML)
+        except Exception:
+            await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
         return
 
     username = context.args[0].strip().lstrip("@")
@@ -475,14 +513,11 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report, avatar = format_user_info_panel(info_data, username)
 
     await status_msg.delete()
-    if avatar:
-        try:
-            await update.message.reply_photo(photo=avatar, caption=report, parse_mode=ParseMode.HTML)
-            return
-        except Exception as e:
-            logger.warning(f"Lỗi gửi avatar: {e}")
-
-    await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+    photo_to_send = avatar or IMG_GETINFO
+    try:
+        await update.message.reply_photo(photo=photo_to_send, caption=report, parse_mode=ParseMode.HTML)
+    except Exception:
+        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
 # TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK
@@ -500,15 +535,10 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         msg = await update.message.reply_text("⏳ <i>Đang bóc tách dữ liệu đa phương tiện...</i>", parse_mode=ParseMode.HTML)
 
-        # 1. Giải nén redirect nếu là vt.tiktok.com hoặc vm.tiktok.com
         target_url = await resolve_tiktok_url(raw_url)
-        # Loại bỏ các tham số thừa đằng sau dấu ?
         clean_url = target_url.split("?")[0] if "vt.tiktok.com" not in target_url else target_url
 
-        # 2. Thử tải qua TikWM
         data = await tikwm_req("", {"url": clean_url, "hd": 1})
-
-        # 3. Dự phòng API phụ (LoveTik)
         if not data or data.get("code") != 0:
             logger.warning("TikWM không phản hồi, chuyển sang Fallback LoveTik...")
             data = await fallback_tik_download(clean_url)
@@ -541,14 +571,12 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
         try:
-            # Nếu là album slide ảnh
             if res.get("images"):
                 await msg.delete()
                 media = [InputMediaPhoto(media=img) for img in res["images"][:10]]
                 await update.message.reply_media_group(media=media)
-                await update.message.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+                await update.message.reply_photo(photo=IMG_DOWN, caption=caption, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
             else:
-                # Video MP4 HD
                 video_url = res.get("hdplay") or res.get("play")
                 if not video_url:
                     await msg.edit_text("❌ Không trích xuất được link video chất lượng cao.")
