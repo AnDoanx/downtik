@@ -25,23 +25,19 @@ from telegram.ext import (
     filters,
 )
 
-# Ghi nhận mốc thời gian khởi động bot để tính Uptime
 BOT_START_TIME = time.time()
 
 # ================= CẤU HÌNH TOKEN & API =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
-ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn private, để trống nếu public
+ALLOWED_USERS = []
 
-# TikTok API Endpoints
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
-# Facebook Graph API & Tokens
 FB_TOKENS = [
     "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
 ]
 
-# Banner Images theo từng tác vụ
 IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
 IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
@@ -52,9 +48,8 @@ TIK_HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     "Accept-Language": "vi,en-US;q=0.9,en;q=0.8",
-    "Referer": "https://www.tikwm.com/",
 }
 
 logging.basicConfig(
@@ -79,61 +74,68 @@ async def get_http_session() -> aiohttp.ClientSession:
     return HTTP_SESSION
 
 
-# ================= CÁC HÀM XỬ LÝ FACEBOOK =================
-def estimate_fb_creation_year(uid: str) -> str:
-    """Ước lượng thời gian tạo tài khoản dựa vào cấu trúc dải số UID."""
+# ================= THUẬT TOÁN ĐỊNH NĂM TẠO TÀI KHOẢN THEO UID =================
+def estimate_fb_creation_details(uid: str) -> str:
+    """Xác định năm khởi tạo tài khoản Facebook dựa theo mốc phân bổ UID."""
     if not uid.isdigit():
         return "Không công khai"
 
     val = int(uid)
-    if val < 1000000:
-        return "Khoảng 2004 - 2006 (Giai đoạn đầu)"
+    if val < 10000000:
+        return "Năm 2004 - 2006 (Giai đoạn thử nghiệm Harvard/Mỹ)"
     elif val < 100000000:
-        return "Khoảng 2006 - 2008"
+        return "Năm 2006 - 2008 (Mở rộng toàn cầu)"
+    elif val < 1000000000:
+        return "Năm 2008 - 2009"
 
+    # Dải 15 chữ số bắt đầu bằng 10000
     if str(val).startswith("10000"):
-        prefix = str(val)[5:8]
-        if prefix.isdigit():
-            p_val = int(prefix)
-            if p_val < 50:
-                return "Khoảng 2009 - 2010"
-            elif p_val < 150:
-                return "Khoảng 2010 - 2012"
-            elif p_val < 300:
-                return "Khoảng 2012 - 2014"
-            else:
-                return "Khoảng 2014 - 2016"
+        part = int(str(val)[5:8])
+        if part < 15:
+            return "Năm 2009"
+        elif part < 35:
+            return "Năm 2010"
+        elif part < 65:
+            return "Năm 2011"
+        elif part < 110:
+            return "Năm 2012"
+        elif part < 180:
+            return "Năm 2013"
+        elif part < 260:
+            return "Năm 2014"
+        elif part < 360:
+            return "Năm 2015"
+        else:
+            return "Năm 2016"
 
-    if str(val).startswith("10001") or str(val).startswith("10002"):
-        return "Khoảng 2016 - 2018"
-    elif str(val).startswith("10003") or str(val).startswith("10004"):
-        return "Khoảng 2018 - 2020"
-    elif str(val).startswith("10005") or str(val).startswith("10006") or str(val).startswith("10007"):
-        return "Khoảng 2020 - 2022"
-    elif str(val).startswith("10008") or str(val).startswith("10009"):
-        return "Khoảng 2022 - 2024"
-    elif str(val).startswith("6155") or str(val).startswith("6156") or str(val).startswith("6157"):
-        return "Khoảng 2023 - 2026 (Tài khoản mới)"
+    # Dải số 10001 - 10009
+    if str(val).startswith("10001"):
+        return "Năm 2016 - 2017"
+    elif str(val).startswith("10002"):
+        return "Năm 2017 - 2018"
+    elif str(val).startswith("10003"):
+        return "Năm 2018 - 2019"
+    elif str(val).startswith("10004"):
+        return "Năm 2019 - 2020"
+    elif str(val).startswith("10005"):
+        return "Năm 2020 - 2021"
+    elif str(val).startswith("10006"):
+        return "Năm 2021 - 2022"
+    elif str(val).startswith("10007") or str(val).startswith("10008"):
+        return "Năm 2022 - 2023"
+    elif str(val).startswith("10009"):
+        return "Năm 2023 - 2024"
+    elif str(val).startswith("6155") or str(val).startswith("6156"):
+        return "Năm 2024 - 2025 (Tài khoản mới)"
+    elif str(val).startswith("6157"):
+        return "Năm 2025 - 2026"
 
-    return "Không công khai"
+    return "Tài khoản bảo mật cao"
 
 
-def format_fb_time(time_str: str | None) -> str:
-    """Format thời gian ISO 8601 sang ngày giờ Việt Nam."""
-    if not time_str or time_str == "None":
-        return "Không công khai"
-    try:
-        clean_time = time_str.split("+")[0].replace("Z", "")
-        dt = datetime.fromisoformat(clean_time)
-        return dt.strftime("%d/%m/%Y lúc %H:%M:%S")
-    except Exception:
-        return time_str.replace("T", " ")
-
-
+# ================= HÀM LẤY UID CHÍNH XÁC =================
 async def get_fb_id(input_str: str) -> str | None:
-    """Bóc tách UID Facebook trực tiếp, qua Graph API hoặc các endpoint dự phòng."""
     clean = input_str.strip()
-
     if clean.isdigit():
         return clean
 
@@ -151,56 +153,77 @@ async def get_fb_id(input_str: str) -> str | None:
 
     session = await get_http_session()
 
+    # Thử qua Graph API
     for token in FB_TOKENS:
         try:
-            fb_graph_url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
-            async with session.get(fb_graph_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
                 if resp.status == 200:
-                    res = await resp.json(content_type=None)
-                    if "id" in res:
-                        return str(res["id"])
+                    j = await resp.json(content_type=None)
+                    if "id" in j:
+                        return str(j["id"])
         except Exception:
             pass
 
+    # TraoDoiSub Resolver
     try:
-        tds_url = "https://id.traodoisub.com/api.php"
-        async with session.post(tds_url, data={"link": clean}, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+        async with session.post("https://id.traodoisub.com/api.php", data={"link": clean}, timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status == 200:
-                data = await resp.json(content_type=None)
-                if data.get("id"):
-                    return str(data["id"])
+                j = await resp.json(content_type=None)
+                if j.get("id"):
+                    return str(j["id"])
     except Exception:
         pass
 
+    # FFB Resolver
     try:
-        api_url = f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}"
-        async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+        async with session.get(f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}", timeout=aiohttp.ClientTimeout(total=6)) as resp:
             if resp.status == 200:
-                data = await resp.json(content_type=None)
-                if data.get("id"):
-                    return str(data["id"])
-    except Exception as e:
-        logger.error(f"FFB Error: {e}")
+                j = await resp.json(content_type=None)
+                if j.get("id"):
+                    return str(j["id"])
+    except Exception:
+        pass
 
     return None
 
 
+# ================= HÀM QUÉT DỮ LIỆU PROFILE FACEBOOK ĐA TẦNG =================
 async def fetch_fb_info(uid: str) -> dict | None:
-    """Truy vấn thông tin Facebook kết hợp Graph API gốc và Scraper dự phòng."""
     session = await get_http_session()
-    result = {"id": uid}
+    result = {
+        "id": uid,
+        "name": None,
+        "gender": None,
+        "followers": None,
+        "created_time": None,
+        "updated_time": None,
+        "hometown": None,
+        "location": None,
+        "about": None,
+        "work": None,
+        "education": None,
+        "verified": False,
+        "username": None,
+    }
 
+    # 1. Graph API: Lấy thông tin cơ bản
     for token in FB_TOKENS:
         try:
-            url = f"https://graph.facebook.com/{uid}?fields=id,name,gender,short_name&access_token={token}"
+            url = f"https://graph.facebook.com/{uid}?fields=id,name,first_name,last_name,gender,is_verified,short_name,username,updated_time&access_token={token}"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
                 res = await resp.json(content_type=None)
                 if res and "name" in res:
-                    result.update(res)
+                    result["name"] = res.get("name")
+                    result["gender"] = res.get("gender")
+                    result["verified"] = res.get("is_verified", False)
+                    result["username"] = res.get("username")
+                    result["updated_time"] = res.get("updated_time")
                     break
-        except Exception as e:
-            logger.warning(f"Graph API pass: {e}")
+        except Exception:
+            pass
 
+    # 2. Scraper qua API FindIDs
     try:
         scraper_url = f"https://api.findids.net/api/facebook/profile?id={uid}"
         async with session.get(scraper_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
@@ -208,40 +231,101 @@ async def fetch_fb_info(uid: str) -> dict | None:
                 s_data = await resp.json(content_type=None)
                 if isinstance(s_data, dict) and s_data.get("data"):
                     info = s_data["data"]
-                    result["name"] = result.get("name") or info.get("name")
-                    result["followers"] = info.get("follower") or info.get("followers")
-                    result["created_time"] = info.get("created_time") or info.get("join_date")
-                    result["hometown"] = info.get("hometown")
-                    result["location"] = info.get("location")
-                    result["about"] = info.get("bio") or info.get("about")
-                    result["education"] = info.get("education")
-                    result["work"] = info.get("work")
-    except Exception as e:
-        logger.warning(f"Scraper pass: {e}")
+                    if not result["name"]:
+                        result["name"] = info.get("name")
+                    result["followers"] = info.get("follower") or info.get("followers") or result["followers"]
+                    result["created_time"] = info.get("created_time") or info.get("join_date") or result["created_time"]
+                    result["hometown"] = info.get("hometown") or result["hometown"]
+                    result["location"] = info.get("location") or result["location"]
+                    result["about"] = info.get("bio") or info.get("about") or result["about"]
+                    result["education"] = info.get("education") or result["education"]
+                    result["work"] = info.get("work") or result["work"]
+    except Exception:
+        pass
 
-    if "name" in result or result.get("id"):
+    # 3. Quét Web Scraper trực tiếp từ HTML công khai của Facebook (Lấy Follower & Nơi ở nếu các API trên bị thiếu)
+    if not result["followers"] or not result["location"] or not result["about"]:
+        try:
+            fb_web_url = f"https://m.facebook.com/{uid}"
+            custom_headers = {
+                **TIK_HEADERS,
+                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8",
+            }
+            async with session.get(fb_web_url, headers=custom_headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                if r.status == 200:
+                    html_text = await r.text()
+
+                    # Cào số người theo dõi
+                    if not result["followers"]:
+                        fol_match = re.search(r"Có\s+([\d.,]+)\s+người\s+theo\s+dõi", html_text, re.IGNORECASE)
+                        if not fol_match:
+                            fol_match = re.search(r"Followed by\s+([\d.,]+)\s+people", html_text, re.IGNORECASE)
+                        if fol_match:
+                            result["followers"] = fol_match.group(1).replace(".", "").replace(",", "")
+
+                    # Cào nơi sống / quê quán
+                    if not result["location"]:
+                        live_match = re.search(r"Sống tại\s+<[^>]+>([^<]+)</a>", html_text)
+                        if not live_match:
+                            live_match = re.search(r"Lives in\s+<[^>]+>([^<]+)</a>", html_text)
+                        if live_match:
+                            result["location"] = live_match.group(1)
+
+                    if not result["hometown"]:
+                        home_match = re.search(r"Đến từ\s+<[^>]+>([^<]+)</a>", html_text)
+                        if not home_match:
+                            home_match = re.search(r"From\s+<[^>]+>([^<]+)</a>", html_text)
+                        if home_match:
+                            result["hometown"] = home_match.group(1)
+
+                    # Cào tiểu sử (Bio)
+                    if not result["about"]:
+                        bio_match = re.search(r'<div class="[^"]*" data-sigil="profile-intro-card-bio"><span>([^<]+)</span>', html_text)
+                        if bio_match:
+                            result["about"] = bio_match.group(1)
+        except Exception:
+            pass
+
+    if result["name"] or result["id"]:
         return result
-
     return None
 
 
 def format_fb_info_panel(data: dict) -> tuple[str, str]:
-    """Bóc tách và hiển thị chuẩn xác Followers, Ngày tạo và Cập nhật lần cuối."""
+    """Tạo bảng thông tin hoàn chỉnh, chi tiết và đẹp mắt nhất."""
     uid = str(data.get("id", "—"))
     name = html.escape(str(data.get("name") or "Người dùng Facebook"))
-    gender = html.escape(str(data.get("gender") or "Không công khai")).capitalize()
+    username = html.escape(str(data.get("username") or "—"))
 
-    raw_followers = data.get("followers")
-    if raw_followers:
-        followers_str = f"<b>{int(raw_followers):,}</b> người theo dõi" if str(raw_followers).isdigit() else f"<b>{raw_followers}</b>"
+    # Giới tính
+    raw_gender = data.get("gender")
+    gender_map = {"male": "Nam 🚹", "female": "Nữ 🚺"}
+    gender = gender_map.get(str(raw_gender).lower(), "Không công khai 🔒")
+
+    # Người theo dõi (Followers)
+    raw_fol = data.get("followers")
+    if raw_fol:
+        clean_fol = str(raw_fol).replace(",", "").replace(".", "").strip()
+        followers_str = f"<b>{int(clean_fol):,}</b> người theo dõi" if clean_fol.isdigit() else f"<b>{raw_fol}</b> người theo dõi"
     else:
-        followers_str = "<i>Không công khai hoặc đã tắt</i>"
+        followers_str = "<i>Không công khai hoặc tắt follow</i>"
 
+    # Ngày tạo tài khoản & Cập nhật
     raw_created = data.get("created_time")
-    if raw_created:
-        created_str = format_fb_time(raw_created)
+    if raw_created and raw_created != "None":
+        created_str = str(raw_created).split("T")[0]
     else:
-        created_str = f"~ {estimate_fb_creation_year(uid)}"
+        created_str = estimate_fb_creation_details(uid)
+
+    raw_updated = data.get("updated_time")
+    if raw_updated and raw_updated != "None":
+        try:
+            up_dt = datetime.fromisoformat(raw_updated.split("+")[0].replace("Z", ""))
+            updated_str = up_dt.strftime("%d/%m/%Y lúc %H:%M")
+        except Exception:
+            updated_str = str(raw_updated).replace("T", " ")
+    else:
+        updated_str = "Theo thời gian thực"
 
     hometown = html.escape(str(data.get("hometown") or "Không công khai"))
     location = html.escape(str(data.get("location") or "Không công khai"))
@@ -249,28 +333,29 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     work = html.escape(str(data.get("work") or "Không công khai"))
     education = html.escape(str(data.get("education") or "Không công khai"))
 
+    badge = "💎 ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
     avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
 
     panel = (
-        f"╔══════════ 👤 <b>HỒ SƠ FACEBOOK PRO</b> ══════════╗\n"
-        f"║ 📛 <b>Họ tên:</b> <b>{name}</b>\n"
-        f"║ 🆔 <b>UID:</b> <code>{uid}</code>\n"
-        f"║ 🚻 <b>Giới tính:</b> {gender}\n"
-        f"║ 🛡 <b>Trạng thái:</b> 🟢 Hoạt động\n"
-        f"╠══════════ 🕒 <b>THỜI GIAN HOẠT ĐỘNG</b> ══════════╣\n"
-        f"║ 🗓 <b>Ngày tạo tài khoản:</b> <code>{created_str}</code>\n"
-        f"╠══════════ 📊 <b>TƯƠNG TÁC & FOLLOWERS</b> ══════════╣\n"
-        f"║ 👥 <b>Người theo dõi:</b> {followers_str}\n"
-        f"╠══════════ 📍 <b>QUÊ QUÁN & NƠI Ở</b> ══════════╣\n"
-        f"║ 🏡 <b>Quê quán:</b> {hometown}\n"
-        f"║ 📌 <b>Nơi sống:</b> {location}\n"
-        f"╠══════════ 💼 <b>CÔNG VIỆC & HỌC VẤN</b> ══════════╣\n"
-        f"║ 🎓 <b>Học vấn:</b> {education}\n"
-        f"║ 🏢 <b>Công việc:</b> {work}\n"
-        f"╠══════════ 📝 <b>TIỂU SỬ & LIÊN KẾT</b> ══════════╣\n"
-        f"║ 💬 <b>Bio:</b> <i>« {about} »</i>\n"
-        f"║ 🔗 <b>Trang cá nhân:</b> <a href='https://facebook.com/{uid}'>facebook.com/{uid}</a>\n"
-        f"╚════════════════════════════════════════════╝"
+        f"⚡ <b>HỒ SƠ FACEBOOK PRO CHI TIẾT</b> ⚡\n"
+        f"<code>────────────────────────────</code>\n"
+        f"👤 <b>Họ tên:</b> <b>{name}</b>\n"
+        f"🆔 <b>Mã UID:</b> <code>{uid}</code>\n"
+        f"🔗 <b>Username:</b> <code>{username}</code>\n"
+        f"🚻 <b>Giới tính:</b> {gender}\n"
+        f"🛡 <b>Trạng thái:</b> <code>{badge}</code>\n"
+        f"<code>────────────────────────────</code>\n"
+        f"👥 <b>Người theo dõi:</b> {followers_str}\n"
+        f"🗓 <b>Thời gian lập:</b> <code>{created_str}</code>\n"
+        f"🔄 <b>Cập nhật gần nhất:</b> <code>{updated_str}</code>\n"
+        f"<code>────────────────────────────</code>\n"
+        f"🏡 <b>Quê quán:</b> {hometown}\n"
+        f"📍 <b>Nơi sống hiện tại:</b> {location}\n"
+        f"💼 <b>Công việc:</b> {work}\n"
+        f"🎓 <b>Học vấn:</b> {education}\n"
+        f"<code>────────────────────────────</code>\n"
+        f"💬 <b>Tiểu sử:</b> <i>« {about} »</i>\n"
+        f"🌐 <b>Liên kết trực tiếp:</b> <a href='https://facebook.com/{uid}'>fb.com/{uid}</a>"
     )
     return panel, avatar_url
 
@@ -420,27 +505,26 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
 
     panel = (
-        f"╔══════════ 👤 <b>HỒ SƠ TIKTOK</b> ══════════╗\n"
-        f"║ 📛 <b>Tên:</b> <b>{nickname}</b>\n"
-        f"║ 🆔 <b>ID:</b> <code>@{unique_id}</code>\n"
-        f"║ 🔢 <b>Mã UID:</b> <code>{uid}</code>\n"
-        f"║ 🌍 <b>Khu vực:</b> <code>{region}</code>\n"
-        f"║ 🛡 <b>Trạng thái:</b> {verified_badge} │ {private_badge}\n"
-        f"╠══════════ 📊 <b>CHỈ SỐ TƯƠNG TÁC</b> ══════════╣\n"
-        f"║ 👥 <b>Followers:</b> <code>{followers:,}</code>\n"
-        f"║ 👣 <b>Following:</b> <code>{following:,}</code>\n"
-        f"║ ❤️ <b>Tổng Tym:</b> <code>{hearts:,}</code>\n"
-        f"║ 🎬 <b>Video đã đăng:</b> <code>{videos:,}</code>\n"
-        f"║ 👍 <b>Đã thả tim:</b> <code>{diggs:,}</code>\n"
-        f"╠══════════ 📝 <b>TIỂU SỬ KÊNH</b> ══════════╣\n"
-        f"║ <i>« {bio} »</i>\n"
-        f"╚════════════════════════════════════╝"
+        f"⚡ <b>HỒ SƠ TIKTOK CHI TIẾT</b> ⚡\n"
+        f"<code>────────────────────────────</code>\n"
+        f"📛 <b>Tên:</b> <b>{nickname}</b>\n"
+        f"🆔 <b>ID:</b> <code>@{unique_id}</code>\n"
+        f"🔢 <b>Mã UID:</b> <code>{uid}</code>\n"
+        f"🌍 <b>Khu vực:</b> <code>{region}</code>\n"
+        f"🛡 <b>Trạng thái:</b> {verified_badge} │ {private_badge}\n"
+        f"<code>────────────────────────────</code>\n"
+        f"👥 <b>Followers:</b> <code>{followers:,}</code>\n"
+        f"👣 <b>Following:</b> <code>{following:,}</code>\n"
+        f"❤️ <b>Tổng Tym:</b> <code>{hearts:,}</code>\n"
+        f"🎬 <b>Video:</b> <code>{videos:,}</code> │ 👍 <b>Thả tim:</b> <code>{diggs:,}</code>\n"
+        f"<code>────────────────────────────</code>\n"
+        f"💬 <b>Tiểu sử:</b> <i>« {bio} »</i>"
     )
 
     return panel, avatar
 
 
-# ================= DASHBOARD & PANEL ĐƯỢC THIẾT KẾ LẠI =================
+# ================= DASHBOARD & STATUS =================
 def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboardMarkup]:
     display_name = html.escape(user_name)
     panel = (
@@ -474,15 +558,12 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
 
 
 async def build_server_status_panel() -> str:
-    """Đo đạc số liệu kỹ thuật thực tế của hệ thống để hiển thị panel status chuyên nghiệp."""
-    # 1. Tính Uptime
     uptime_sec = int(time.time() - BOT_START_TIME)
     days, remainder = divmod(uptime_sec, 86400)
     hours, remainder = divmod(remainder, 3600)
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days else f"{hours}h {minutes}m {seconds}s"
 
-    # 2. Đo Ping mạng thực tế tới API
     session = await get_http_session()
     start_t = time.perf_counter()
     ping_ms = 0
@@ -492,7 +573,6 @@ async def build_server_status_panel() -> str:
     except Exception:
         ping_ms = 99
 
-    # 3. Đọc RAM sử dụng nếu có thư viện
     try:
         import resource
         ram_usage = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
@@ -513,9 +593,9 @@ async def build_server_status_panel() -> str:
         f"├ 🔁 <b>Fallback CDN:</b> 🟢 Standby Ready\n"
         f"├ 🎵 <b>Audio Extractor:</b> 🟢 Operational\n"
         f"├ 🔍 <b>TikTok Inspector:</b> 🟢 Operational\n"
-        f"└ 🔵 <b>Facebook Graph:</b> 🟢 Connected\n"
+        f"└ 🔵 <b>Facebook Multi-OSINT:</b> 🟢 Connected\n"
         f"<code>────────────────────────────</code>\n"
-        f"🛡 <b>Firewall & WAF:</b> <i>Bypass Active</i>"
+        f"🛡 <b>Anti-WAF:</b> <i>Bypass Active</i>"
     )
     return status_panel
 
@@ -580,7 +660,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/music &lt;link_tiktok&gt;</code>\n"
             "• Hoặc bấm trực tiếp nút <b>[Tải nhạc]</b> bên dưới mỗi video tải về.\n"
-            "• Trả về file âm thanh chuẩn chất lượng cao 320kbps kèm Tag nghệ sĩ."
+            "• Trả về file âm thanh chất lượng cao kèm thông tin nghệ sĩ."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -602,11 +682,11 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_fb":
         text = (
-            "🔵 <b>TRA CỨU FACEBOOK PROFILE</b>\n"
+            "🔵 <b>TRA CỨU FACEBOOK PROFILE PRO</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc <code>/fb https://facebook.com/zuck</code>\n"
-            "• Trả về: Tên, UID, Follower, Ngày tạo tài khoản, Quê quán, Học vấn."
+            "• <b>Dữ liệu chi tiết:</b> Tên, UID, Username, Giới tính, Followers, Thời gian tạo, Quê quán, Nơi ở, Học vấn, Công việc, Bio."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -621,7 +701,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
 
-# LỆNH /fb <link_hoặc_uid> (FULL INFO)
+# LỆNH /fb <link_hoặc_uid> (FULL INFO MỚI)
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -641,14 +721,14 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = await get_fb_id(input_data)
     if not uid:
-        await status_msg.edit_text("❌ Không lấy được UID. Vui lòng kiểm tra lại link hoặc định dạng!", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text("❌ Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!", parse_mode=ParseMode.HTML)
         return
 
     await status_msg.edit_text(f"📡 <i>Đang truy vấn dữ liệu chi tiết cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
     data = await fetch_fb_info(uid)
 
     if not data:
-        await status_msg.edit_text("❌ Không tìm thấy thông tin hoặc Token Facebook đã hết hạn.", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text("❌ Không lấy được thông tin từ profile này.", parse_mode=ParseMode.HTML)
         return
 
     report, avatar_url = format_fb_info_panel(data)
@@ -911,11 +991,11 @@ def main():
     app.add_handler(CommandHandler("downmusic", cmd_music))
     app.add_handler(CommandHandler("fb", cmd_fb))
 
-    # Callbacks tương tác Panel & Download Audio
+    # Callbacks
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
     app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
 
-    # Tự động bắt link TikTok
+    # Message Handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
     app.run_polling()
