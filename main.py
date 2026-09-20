@@ -45,6 +45,7 @@ IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a90
 IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
 IMG_DOWN = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png"
+IMG_FB = "https://cdn.phototourl.com/member/2026-09-20-9afea8db-8a1c-4ffb-9f41-68c26a82f2f5.jpg"
 
 TIK_HEADERS = {
     "User-Agent": (
@@ -220,7 +221,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
                     result["updated_time"] = res.get("updated_time")
                     result["about"] = res.get("about")
 
-                    # Bóc tách Hometown & Location
                     if isinstance(res.get("hometown"), dict):
                         result["hometown"] = res["hometown"].get("name")
                     elif res.get("hometown"):
@@ -231,7 +231,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
                     elif res.get("location"):
                         result["location"] = str(res.get("location"))
 
-                    # Bóc tách Công việc
                     if res.get("work") and isinstance(res["work"], list):
                         work_items = []
                         for w in res["work"][:2]:
@@ -244,7 +243,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
                         if work_items:
                             result["work"] = " | ".join(work_items)
 
-                    # Bóc tách Học vấn
                     if res.get("education") and isinstance(res["education"], list):
                         edu_items = []
                         for ed in res["education"][:2]:
@@ -269,7 +267,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
                 if r.status == 200:
                     raw_html = await r.text()
 
-                    # Bóc tách Quê quán
                     if not result["hometown"]:
                         m_home = re.search(r'(?:Đến từ|From)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                         if not m_home:
@@ -277,7 +274,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
                         if m_home:
                             result["hometown"] = m_home.group(1).strip()
 
-                    # Bóc tách Nơi ở hiện tại
                     if not result["location"]:
                         m_loc = re.search(r'(?:Sống tại|Lives in)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                         if not m_loc:
@@ -285,19 +281,16 @@ async def fetch_fb_info(uid: str) -> dict | None:
                         if m_loc:
                             result["location"] = m_loc.group(1).strip()
 
-                    # Bóc tách Công việc
                     if not result["work"]:
                         m_work = re.search(r'(?:Làm việc tại|Works at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                         if m_work:
                             result["work"] = f"Làm việc tại {m_work.group(1).strip()}"
 
-                    # Bóc tách Học vấn
                     if not result["education"]:
                         m_edu = re.search(r'(?:Từng học tại|Học tại|Studied at|Studies at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                         if m_edu:
                             result["education"] = m_edu.group(1).strip()
 
-                    # Bóc tách Người theo dõi
                     if not result["followers"]:
                         m_fol = re.search(r'Có\s+([\d.,]+)\s+người\s+theo\s+dõi', raw_html, re.IGNORECASE)
                         if not m_fol:
@@ -307,7 +300,7 @@ async def fetch_fb_info(uid: str) -> dict | None:
         except Exception as e:
             logger.warning(f"About Scraper error: {e}")
 
-    # BƯỚC 3: Dự phòng API bên thứ 3 nếu vẫn khuyết trường
+    # BƯỚC 3: Dự phòng API bên thứ 3
     if not (result["followers"] and result["work"] and result["hometown"]):
         try:
             scraper_url = f"https://api.findids.net/api/facebook/profile?id={uid}"
@@ -332,17 +325,14 @@ async def fetch_fb_info(uid: str) -> dict | None:
 
 
 def format_fb_info_panel(data: dict) -> tuple[str, str]:
-    """Tạo bảng thông tin hoàn chỉnh, chi tiết và đẹp mắt nhất."""
     uid = str(data.get("id", "—"))
     name = html.escape(str(data.get("name") or "Người dùng Facebook"))
     username = html.escape(str(data.get("username") or "—"))
 
-    # Giới tính
     raw_gender = data.get("gender")
     gender_map = {"male": "Nam 🚹", "female": "Nữ 🚺"}
     gender = gender_map.get(str(raw_gender).lower(), "Không công khai 🔒")
 
-    # Người theo dõi
     raw_fol = data.get("followers")
     if raw_fol:
         clean_fol = str(raw_fol).replace(",", "").replace(".", "").strip()
@@ -350,7 +340,6 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     else:
         followers_str = "<i>Không công khai hoặc tắt follow</i>"
 
-    # Ngày tạo tài khoản & Cập nhật
     raw_created = data.get("created_time")
     if raw_created and raw_created != "None":
         created_str = str(raw_created).split("T")[0]
@@ -741,7 +730,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
 
-# LỆNH /fb <link_hoặc_uid> (FULL INFO MỚI)
+# LỆNH /fb <link_hoặc_uid> (SỬ DỤNG BANNER IMG_FB)
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -753,7 +742,10 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"║ 💡 <i>Ví dụ: <code>/fb 4</code> hoặc <code>/fb https://facebook.com/...</code></i>\n"
             f"╚════════════════════════════════════╝"
         )
-        await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
+        try:
+            await update.message.reply_photo(photo=IMG_FB, caption=help_panel, parse_mode=ParseMode.HTML)
+        except Exception:
+            await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
         return
 
     input_data = context.args[0].strip()
@@ -777,7 +769,10 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_photo(photo=avatar_url, caption=report, parse_mode=ParseMode.HTML)
     except Exception:
-        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+        try:
+            await update.message.reply_photo(photo=IMG_FB, caption=report, parse_mode=ParseMode.HTML)
+        except Exception:
+            await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
 # Nút callback tải nhạc dưới video
@@ -895,7 +890,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
-        await query.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
+        await update.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
 
 
 # Lệnh /getinfo
