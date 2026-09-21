@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import time
+import urllib.parse
 import aiohttp
 from telegram import (
     InlineKeyboardButton,
@@ -31,13 +32,16 @@ BOT_START_TIME = time.time()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
 ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn private, để trống nếu public
 
+# Cookie Facebook (c_user=...; xs=...) để cào bio, follower và link MXH không bị chặn
+FB_COOKIE = os.getenv("FB_COOKIE", "")
+
 # TikTok API Endpoints
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
 # Facebook Graph API & Tokens
 FB_TOKENS = [
-    "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
+    os.getenv("FB_TOKEN", "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD")
 ]
 
 # Banner Images theo từng tác vụ
@@ -187,6 +191,106 @@ async def get_fb_id(input_str: str) -> str | None:
     return None
 
 
+# ================= SCRAPER NÂNG CAO: FOLLOWER, BIO, SOCIAL LINKS =================
+async def scrape_fb_full_details(uid: str) -> dict:
+    session = await get_http_session()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+    if FB_COOKIE:
+        headers["Cookie"] = FB_COOKIE
+
+    extracted = {
+        "followers": None,
+        "bio": None,
+        "social_links": [],
+        "hometown": None,
+        "location": None,
+        "work": None,
+        "education": None,
+    }
+
+    # 1. Quét trang profile chính (Lấy Follower & Bio)
+    try:
+        async with session.get(f"https://mbasic.facebook.com/{uid}", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            if r.status == 200:
+                html_text = await r.text()
+
+                # Regex Follower
+                fol_match = re.search(r'(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)', html_text, re.IGNORECASE)
+                if fol_match:
+                    extracted["followers"] = fol_match.group(1).replace(".", "").replace(",", "").strip()
+
+                # Regex Bio
+                bio_match = re.search(r'<div class="[^"]*" id="bio">([\s\S]*?)</div>', html_text)
+                if not bio_match:
+                    bio_match = re.search(r'intro_bio[^>]*><span>([\s\S]*?)</span>', html_text)
+                if bio_match:
+                    clean_bio = re.sub(r'<br\s*/?>', '\n', bio_match.group(1))
+                    clean_bio = re.sub(r'<[^>]+>', '', clean_bio).strip()
+                    extracted["bio"] = html.unescape(clean_bio)
+    except Exception as e:
+        logger.warning(f"Lỗi scrape trang cá nhân: {e}")
+
+    # 2. Quét trang About (Lấy quê quán, nơi ở, học vấn, công việc & các liên kết MXH)
+    try:
+        async with session.get(f"https://mbasic.facebook.com/{uid}/about", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            if r.status == 200:
+                raw_html = await r.text()
+
+                # Hometown
+                m_home = re.search(r'(?:Đến từ|From)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                if not m_home:
+                    m_home = re.search(r'(?:Quê quán|Hometown)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                if m_home:
+                    extracted["hometown"] = m_home.group(1).strip()
+
+                # Location
+                m_loc = re.search(r'(?:Sống tại|Lives in)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                if not m_loc:
+                    m_loc = re.search(r'(?:Tỉnh/Thành phố hiện tại|Current city)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                if m_loc:
+                    extracted["location"] = m_loc.group(1).strip()
+
+                # Work
+                m_work = re.search(r'(?:Làm việc tại|Works at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                if m_work:
+                    extracted["work"] = f"Làm việc tại {m_work.group(1).strip()}"
+
+                # Education
+                m_edu = re.search(r'(?:Từng học tại|Học tại|Studied at|Studies at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                if m_edu:
+                    extracted["education"] = m_edu.group(1).strip()
+
+                # Nếu trang chủ chưa tìm ra follower thì bóc tách tại /about
+                if not extracted["followers"]:
+                    m_fol = re.search(r'(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)', raw_html, re.IGNORECASE)
+                    if m_fol:
+                        extracted["followers"] = m_fol.group(1).replace(".", "").replace(",", "").strip()
+
+                # Quét các liên kết MXH gắn ngoài
+                redirect_links = re.findall(r'href="https?://(?:[a-z0-9-]+\.)?facebook\.com/l\.php\?u=([^"&]+)', raw_html)
+                social_domains = [
+                    "instagram.com", "tiktok.com", "youtube.com", "youtu.be",
+                    "t.me", "threads.net", "twitter.com", "x.com", "github.com",
+                    "discord.gg", "linkedin.com", "pinterest.com", "spotify.com"
+                ]
+                found_links = set()
+
+                for raw_link in redirect_links:
+                    decoded_url = urllib.parse.unquote(raw_link)
+                    if any(domain in decoded_url for domain in social_domains):
+                        clean_item = decoded_url.split("?")[0].rstrip("/")
+                        found_links.add(clean_item)
+
+                extracted["social_links"] = list(found_links)
+    except Exception as e:
+        logger.warning(f"Lỗi scrape about: {e}")
+
+    return extracted
+
+
 # ================= HÀM QUÉT DỮ LIỆU PROFILE FACEBOOK ĐA TẦNG =================
 async def fetch_fb_info(uid: str) -> dict | None:
     session = await get_http_session()
@@ -204,9 +308,10 @@ async def fetch_fb_info(uid: str) -> dict | None:
         "education": None,
         "verified": False,
         "username": None,
+        "social_links": [],
     }
 
-    # BƯỚC 1: Lấy qua Graph API mở rộng
+    # BƯỚC 1: Lấy qua Graph API
     fields_target = "id,name,gender,is_verified,short_name,username,updated_time,about,hometown,location,work,education"
     for token in FB_TOKENS:
         try:
@@ -255,53 +360,25 @@ async def fetch_fb_info(uid: str) -> dict | None:
         except Exception as e:
             logger.warning(f"Graph API pass: {e}")
 
-    # BƯỚC 2: Quét mã nguồn tĩnh từ mbasic.facebook.com/uid/about
-    if not (result["hometown"] and result["location"] and result["work"] and result["education"]):
-        try:
-            about_url = f"https://mbasic.facebook.com/{uid}/about"
-            custom_headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-            }
-            async with session.get(about_url, headers=custom_headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                if r.status == 200:
-                    raw_html = await r.text()
-
-                    if not result["hometown"]:
-                        m_home = re.search(r'(?:Đến từ|From)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
-                        if not m_home:
-                            m_home = re.search(r'(?:Quê quán|Hometown)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
-                        if m_home:
-                            result["hometown"] = m_home.group(1).strip()
-
-                    if not result["location"]:
-                        m_loc = re.search(r'(?:Sống tại|Lives in)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
-                        if not m_loc:
-                            m_loc = re.search(r'(?:Tỉnh/Thành phố hiện tại|Current city)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
-                        if m_loc:
-                            result["location"] = m_loc.group(1).strip()
-
-                    if not result["work"]:
-                        m_work = re.search(r'(?:Làm việc tại|Works at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
-                        if m_work:
-                            result["work"] = f"Làm việc tại {m_work.group(1).strip()}"
-
-                    if not result["education"]:
-                        m_edu = re.search(r'(?:Từng học tại|Học tại|Studied at|Studies at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
-                        if m_edu:
-                            result["education"] = m_edu.group(1).strip()
-
-                    if not result["followers"]:
-                        m_fol = re.search(r'Có\s+([\d.,]+)\s+người\s+theo\s+dõi', raw_html, re.IGNORECASE)
-                        if not m_fol:
-                            m_fol = re.search(r'Followed by\s+([\d.,]+)\s+people', raw_html, re.IGNORECASE)
-                        if m_fol:
-                            result["followers"] = m_fol.group(1).replace(".", "").replace(",", "").strip()
-        except Exception as e:
-            logger.warning(f"About Scraper error: {e}")
+    # BƯỚC 2: Quét nâng cao Follower, Tiểu sử & Mạng xã hội liên kết
+    scraped = await scrape_fb_full_details(uid)
+    if scraped.get("followers"):
+        result["followers"] = scraped["followers"]
+    if scraped.get("bio"):
+        result["about"] = scraped["bio"]
+    if scraped.get("social_links"):
+        result["social_links"] = scraped["social_links"]
+    if not result["hometown"] and scraped.get("hometown"):
+        result["hometown"] = scraped["hometown"]
+    if not result["location"] and scraped.get("location"):
+        result["location"] = scraped["location"]
+    if not result["work"] and scraped.get("work"):
+        result["work"] = scraped["work"]
+    if not result["education"] and scraped.get("education"):
+        result["education"] = scraped["education"]
 
     # BƯỚC 3: Dự phòng API bên thứ 3
-    if not (result["followers"] and result["work"] and result["hometown"]):
+    if not (result["followers"] and result["about"]):
         try:
             scraper_url = f"https://api.findids.net/api/facebook/profile?id={uid}"
             async with session.get(scraper_url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
@@ -365,6 +442,32 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     badge = "💎 ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
     avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
 
+    # Định dạng các mạng xã hội gắn kèm
+    social_lines = []
+    social_links = data.get("social_links", [])
+    if social_links:
+        for link in social_links:
+            clean_tag = link.split("/")[-1]
+            if "instagram.com" in link:
+                social_lines.append(f"• 📸 <b>Instagram:</b> <a href='{link}'>@{clean_tag}</a>")
+            elif "tiktok.com" in link:
+                social_lines.append(f"• 🎬 <b>TikTok:</b> <a href='{link}'>@{clean_tag}</a>")
+            elif "youtube.com" in link or "youtu.be" in link:
+                social_lines.append(f"• 🔴 <b>YouTube:</b> <a href='{link}'>Xem kênh</a>")
+            elif "t.me" in link:
+                social_lines.append(f"• ✈️ <b>Telegram:</b> <a href='{link}'>@{clean_tag}</a>")
+            elif "threads.net" in link:
+                social_lines.append(f"• 🧵 <b>Threads:</b> <a href='{link}'>@{clean_tag}</a>")
+            elif "twitter.com" in link or "x.com" in link:
+                social_lines.append(f"• 🐦 <b>X/Twitter:</b> <a href='{link}'>@{clean_tag}</a>")
+            elif "github.com" in link:
+                social_lines.append(f"• 🐙 <b>GitHub:</b> <a href='{link}'>{clean_tag}</a>")
+            else:
+                social_lines.append(f"• 🔗 <b>Khác:</b> <a href='{link}'>{link}</a>")
+        social_display = "\n".join(social_lines)
+    else:
+        social_display = "<i>Không có mạng xã hội liên kết ngoài</i>"
+
     panel = (
         f"⚡ <b>HỒ SƠ FACEBOOK PRO CHI TIẾT</b> ⚡\n"
         f"<code>────────────────────────────</code>\n"
@@ -375,16 +478,20 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         f"🛡 <b>Trạng thái:</b> <code>{badge}</code>\n"
         f"<code>────────────────────────────</code>\n"
         f"👥 <b>Người theo dõi:</b> {followers_str}\n"
-        f"🗓 <b>Thời gian lập:</b> <code>{created_str}</code>\n"
+        f"🗓 <b>Ước tính tạo nick:</b> <code>{created_str}</code>\n"
         f"🔄 <b>Cập nhật gần nhất:</b> <code>{updated_str}</code>\n"
         f"<code>────────────────────────────</code>\n"
         f"🏡 <b>Quê quán:</b> {hometown}\n"
-        f"📍 <b>Nơi sống hiện tại:</b> {location}\n"
+        f"📍 <b>Nơi sống:</b> {location}\n"
         f"💼 <b>Công việc:</b> {work}\n"
         f"🎓 <b>Học vấn:</b> {education}\n"
         f"<code>────────────────────────────</code>\n"
-        f"💬 <b>Tiểu sử:</b> <i>« {about} »</i>\n"
-        f"🌐 <b>Liên kết trực tiếp:</b> <a href='https://facebook.com/{uid}'>fb.com/{uid}</a>"
+        f"📝 <b>Tiểu sử:</b>\n<i>« {about} »</i>\n"
+        f"<code>────────────────────────────</code>\n"
+        f"🌐 <b>MẠNG XÃ HỘI GẮN KÈM:</b>\n"
+        f"{social_display}\n"
+        f"<code>────────────────────────────</code>\n"
+        f"🔗 <b>Liên kết trực tiếp:</b> <a href='https://facebook.com/{uid}'>fb.com/{uid}</a>"
     )
     return panel, avatar_url
 
@@ -567,7 +674,7 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
         f"• 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
         f"• 🔵 <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"🟢 <b>Status:</b> <i>Engine Core v2.5 Online</i>"
+        f"🟢 <b>Status:</b> <i>Engine Core v2.6 Online</i>"
     )
 
     keyboard = [
@@ -715,7 +822,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc <code>/fb https://facebook.com/zuck</code>\n"
-            "• <b>Dữ liệu chi tiết:</b> Tên, UID, Username, Giới tính, Followers, Thời gian tạo, Quê quán, Nơi ở, Học vấn, Công việc, Bio."
+            "• <b>Dữ liệu bóc tách:</b> Tên, UID, Giới tính, Người theo dõi, Năm tạo nick, Nơi sống, Học vấn, Công việc, Toàn bộ tiểu sử & Các mạng xã hội gắn kèm."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -730,7 +837,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
 
-# LỆNH /fb <link_hoặc_uid> (SỬ DỤNG BANNER IMG_FB)
+# LỆNH /fb <link_hoặc_uid>
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -756,7 +863,7 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!", parse_mode=ParseMode.HTML)
         return
 
-    await status_msg.edit_text(f"📡 <i>Đang truy vấn dữ liệu chi tiết cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
+    await status_msg.edit_text(f"📡 <i>Đang quét dữ liệu OSINT, Follower & MXH cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
     data = await fetch_fb_info(uid)
 
     if not data:
