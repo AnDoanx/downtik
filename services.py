@@ -1,3 +1,4 @@
+import html
 import json
 import logging
 import os
@@ -5,10 +6,26 @@ import re
 import aiohttp
 from dotenv import load_dotenv
 
+# Tự động nạp biến môi trường từ .env (hoặc biến trên Railway)
 load_dotenv()
 
-with open("config.json", "r", encoding="utf-8") as f:
-    CONFIG = json.load()
+# Định vị thư mục gốc để đọc file config.json và templates không bao giờ bị lệch đường dẫn
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+
+# Đọc file config.json đúng cú pháp (truyền con trỏ file f vào json.load)
+try:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        CONFIG = json.load(f)
+except Exception as e:
+    CONFIG = {
+        "allowed_users": [],
+        "api": {
+            "tikwm": "https://www.tikwm.com/api/",
+            "tik_info": "https://ksjdjdmfmxm.x10.mx/tik1.php?user=",
+        },
+        "banners": {},
+    }
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FB_TOKENS = [t.strip() for t in os.getenv("FB_TOKENS", "").split(",") if t.strip()]
@@ -17,7 +34,9 @@ TIK_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
 HTTP_SESSION: aiohttp.ClientSession | None = None
@@ -25,7 +44,7 @@ logger = logging.getLogger("MultiToolBot")
 
 
 def load_template(template_name: str, **kwargs) -> str:
-    path = os.path.join("templates", template_name)
+    path = os.path.join(BASE_DIR, "templates", template_name)
     with open(path, "r", encoding="utf-8") as file:
         content = file.read()
     return content.format(**kwargs)
@@ -50,8 +69,14 @@ def estimate_fb_creation(uid: str) -> str:
     val = int(uid)
     if val < 1000000000:
         return "Trước năm 2010"
-    for p, y in [("10001", "2016-2017"), ("10002", "2017-2018"), ("10003", "2018-2019"),
-                ("10004", "2019-2020"), ("10005", "2020-2021"), ("10006", "2021-2022")]:
+    for p, y in [
+        ("10001", "2016-2017"),
+        ("10002", "2017-2018"),
+        ("10003", "2018-2019"),
+        ("10004", "2019-2020"),
+        ("10005", "2020-2021"),
+        ("10006", "2021-2022"),
+    ]:
         if str(val).startswith(p):
             return f"Năm {y}"
     if str(val).startswith(("6155", "6156")):
@@ -76,7 +101,7 @@ async def get_fb_id(input_str: str) -> str | None:
             url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                 if resp.status == 200:
-                    data = await resp.json()
+                    data = await resp.json(content_type=None)
                     if "id" in data:
                         return str(data["id"])
         except Exception:
@@ -86,16 +111,36 @@ async def get_fb_id(input_str: str) -> str | None:
 
 async def fetch_fb_info(uid: str) -> dict | None:
     session = await get_http_session()
-    result = {"id": uid, "name": None, "gender": None, "followers": None, "hometown": None, "location": None, "about": None, "work": None, "education": None, "verified": False, "username": None}
+    result = {
+        "id": uid,
+        "name": None,
+        "gender": None,
+        "followers": None,
+        "hometown": None,
+        "location": None,
+        "about": None,
+        "work": None,
+        "education": None,
+        "verified": False,
+        "username": None,
+    }
     for token in FB_TOKENS:
         try:
             url = f"https://graph.facebook.com/{uid}?fields=id,name,gender,is_verified,username,about,hometown,location,work,education&access_token={token}"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                res = await resp.json()
+                res = await resp.json(content_type=None)
                 if res and "name" in res:
                     result.update(res)
-                    result["hometown"] = res.get("hometown", {}).get("name") if isinstance(res.get("hometown"), dict) else None
-                    result["location"] = res.get("location", {}).get("name") if isinstance(res.get("location"), dict) else None
+                    result["hometown"] = (
+                        res.get("hometown", {}).get("name")
+                        if isinstance(res.get("hometown"), dict)
+                        else None
+                    )
+                    result["location"] = (
+                        res.get("location", {}).get("name")
+                        if isinstance(res.get("location"), dict)
+                        else None
+                    )
                     break
         except Exception:
             pass
@@ -116,9 +161,10 @@ async def resolve_tiktok_url(url: str) -> str:
 async def tikwm_req(params: dict):
     session = await get_http_session()
     try:
-        async with session.post(CONFIG["api"]["tikwm"], data=params, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+        url = CONFIG.get("api", {}).get("tikwm", "https://www.tikwm.com/api/")
+        async with session.post(url, data=params, timeout=aiohttp.ClientTimeout(total=12)) as resp:
             if resp.status == 200:
-                data = await resp.json()
+                data = await resp.json(content_type=None)
                 if data and data.get("code") == 0:
                     return data
     except Exception:
@@ -130,9 +176,11 @@ async def fetch_tiktok_user_info(username: str) -> dict:
     session = await get_http_session()
     clean = username.strip().lstrip("@")
     try:
-        async with session.get(f"{CONFIG['api']['tik_info']}{clean}", timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        base_api = CONFIG.get("api", {}).get("tik_info", "https://ksjdjdmfmxm.x10.mx/tik1.php?user=")
+        async with session.get(f"{base_api}{clean}", timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
-                return await resp.json()
+                return await resp.json(content_type=None)
     except Exception as e:
         return {"error": str(e)}
     return {"error": "API unreachable"}
+
