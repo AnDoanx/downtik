@@ -1,4 +1,4 @@
-Dưới đây là toàn bộ mã nguồn hoàn chỉnh đã ráp trực tiếp hàm giải mã ngày tạo từ Snowflake UID TikTok và đổi toàn bộ giao diện /getinfo sang khung bảng mới:
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
