@@ -1,3 +1,4 @@
+Dưới đây là toàn bộ mã nguồn hoàn chỉnh đã ráp trực tiếp hàm giải mã ngày tạo từ Snowflake UID TikTok và đổi toàn bộ giao diện /getinfo sang khung bảng mới:
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -35,11 +36,6 @@ ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn private, để tr�
 # Cookie Facebook (c_user=...; xs=...) để cào bio, follower và link MXH không bị chặn
 FB_COOKIE = os.getenv("FB_COOKIE", "")
 
-# Free Fire API
-GAMESKINBO_API_KEY = os.getenv(
-    "GAMESKINBO_API_KEY", "cxKZ3Yw3ocTKlP-jX5KV3g-eqcF2FuEPCwAfn46gx_M"
-)
-
 # TikTok API Endpoints
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
@@ -58,7 +54,6 @@ IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
 IMG_DOWN = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png"
 IMG_FB = "https://cdn.phototourl.com/member/2026-09-20-9afea8db-8a1c-4ffb-9f41-68c26a82f2f5.jpg"
-IMG_FF = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
 
 TIK_HEADERS = {
     "User-Agent": (
@@ -89,87 +84,6 @@ async def get_http_session() -> aiohttp.ClientSession:
     if HTTP_SESSION is None or HTTP_SESSION.closed:
         HTTP_SESSION = aiohttp.ClientSession(headers=TIK_HEADERS)
     return HTTP_SESSION
-
-
-# ================= HÀM KIỂM TRA PROFILE FREE FIRE =================
-async def check_ff_profile(uid: str, api_key: str = GAMESKINBO_API_KEY, max_retries: int = 2) -> dict:
-    uid = str(uid).strip()
-    if not uid.isdigit():
-        return {"success": False, "error": "UID phải là số nguyên", "status_code": None}
-
-    url = f"https://api.gameskinbo.com/ff-info/get?uid={uid}"
-    headers = {
-        "x-api-key": api_key,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-    }
-
-    session = await get_http_session()
-
-    for attempt in range(1, max_retries + 1):
-        if attempt > 1:
-            await asyncio.sleep(5)
-
-        try:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                status_code = response.status
-                if status_code == 200:
-                    try:
-                        raw_data = await response.json(content_type=None)
-                    except Exception:
-                        return {"success": False, "error": "Dữ liệu server trả về không hợp lệ.", "status_code": 200}
-
-                    if "AccountInfo" in raw_data:
-                        acc = raw_data.get("AccountInfo", {})
-                        profile = raw_data.get("AccountProfileInfo", {})
-                        guild = raw_data.get("GuildInfo", {})
-
-                        name = html.escape(str(acc.get("AccountName", "N/A")))
-                        level = acc.get("AccountLevel", "N/A")
-                        likes = f"{acc.get('AccountLikes', 0):,}" if str(acc.get("AccountLikes", "")).isdigit() else acc.get("AccountLikes", "N/A")
-                        region = acc.get("AccountRegion", "N/A")
-                        br_point = f"{profile.get('BrRankPoint', 0):,}" if str(profile.get("BrRankPoint", "")).isdigit() else profile.get("BrRankPoint", "N/A")
-                        cs_point = f"{profile.get('CsRankPoint', 0):,}" if str(profile.get("CsRankPoint", "")).isdigit() else profile.get("CsRankPoint", "N/A")
-                        guild_name = html.escape(str(guild.get("GuildName", "Không có")))
-                        guild_level = guild.get("GuildLevel", "N/A")
-
-                        formatted_text = (
-                            f"🎮 <b>THÔNG TIN TÀI KHOẢN FREE FIRE</b> ⚡\n"
-                            f"<code>────────────────────────────</code>\n"
-                            f"👤 <b>Tên nhân vật:</b> <b>{name}</b>\n"
-                            f"🆔 <b>UID:</b> <code>{uid}</code>\n"
-                            f"⭐ <b>Cấp độ (Level):</b> <code>{level}</code>\n"
-                            f"❤️ <b>Lượt thích:</b> <code>{likes}</code>\n"
-                            f"🌐 <b>Khu vực:</b> <code>{region}</code>\n"
-                            f"<code>────────────────────────────</code>\n"
-                            f"🏆 <b>Điểm Rank BR:</b> <code>{br_point}</code> điểm\n"
-                            f"🛡️ <b>Điểm Rank CS:</b> <code>{cs_point}</code> điểm\n"
-                            f"<code>────────────────────────────</code>\n"
-                            f"🏰 <b>Quân đoàn:</b> {guild_name}\n"
-                            f"👑 <b>Cấp Quân đoàn:</b> <code>{guild_level}</code>"
-                        )
-                        return {
-                            "success": True,
-                            "data": raw_data,
-                            "formatted_text": formatted_text,
-                            "status_code": 200,
-                        }
-
-                    err_msg = raw_data.get("error", "Không tìm thấy dữ liệu tài khoản.")
-                    return {"success": False, "error": err_msg, "status_code": 200}
-
-                elif status_code == 429:
-                    return {"success": False, "error": "Chạm giới hạn truy vấn (Rate limit). Vui lòng thử lại sau 1 phút.", "status_code": 429}
-                elif status_code in (401, 403):
-                    return {"success": False, "error": f"API Key lỗi xác thực hoặc hết hạn (HTTP {status_code}).", "status_code": status_code}
-
-        except asyncio.TimeoutError:
-            if attempt == max_retries:
-                return {"success": False, "error": "Hết thời gian kết nối tới máy chủ (Timeout).", "status_code": None}
-        except Exception as e:
-            return {"success": False, "error": f"Lỗi ngoại lệ: {str(e)}", "status_code": None}
-
-    return {"success": False, "error": "Không thể kết nối đến máy chủ Free Fire.", "status_code": None}
 
 
 # ================= THUẬT TOÁN ĐỊNH NĂM TẠO TÀI KHOẢN THEO UID =================
@@ -689,7 +603,7 @@ def get_tiktok_creation_time(uid: str) -> str:
     """Giải mã timestamp ngày tạo tài khoản từ 64-bit Snowflake ID của TikTok."""
     try:
         val = int(uid)
-        timestamp = val >> 32
+        timestamp = val >> 32  # 32-bit đầu là Unix timestamp
         if 1400000000 <= timestamp <= 2000000000:
             dt = datetime.fromtimestamp(timestamp)
             return dt.strftime("%Y-%m-%d | %H:%M:%S")
@@ -720,26 +634,33 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     unique_id = html.escape(str(u.get("uniqueId") or u.get("unique_id") or username).lstrip("@"))
     uid = str(u.get("id") or u.get("uid") or "0")
 
+    # Trạng thái tài khoản
     is_private = u.get("privateAccount") or u.get("is_private") or False
     status_str = "🔒 Riêng tư" if is_private else "🌐 Công khai"
 
+    # Tích xanh / Xác minh
     is_verified = u.get("verified") or u.get("customVerify") or False
     verified_str = "✅ Đã xác minh" if is_verified else "❌ Chưa xác minh"
 
+    # Ngôn ngữ / Vùng
     language = html.escape(str(u.get("language") or u.get("region") or "vi").lower())
 
+    # Mô tả / Tiểu sử
     bio_raw = str(u.get("signature") or u.get("bio") or "Không có tiểu sử.")
     bio = html.escape(bio_raw)
 
+    # Bán hàng (TikTok Shop / Commerce)
     has_shop = u.get("commerceUserInfo", {}).get("commerceUser") or u.get("is_star") or False
     shop_str = "✅ Có" if has_shop else "❌ Không"
 
+    # Chỉ số thống kê
     followers = s.get("followerCount") or s.get("followers") or 0
     following = s.get("followingCount") or s.get("following") or 0
     videos = s.get("videoCount") or s.get("video") or 0
     hearts = s.get("heartCount") or s.get("hearts") or s.get("heart") or 0
     friends = s.get("friendCount") or 0
 
+    # Tính ngày tạo từ UID
     created_time_str = get_tiktok_creation_time(uid)
 
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
@@ -775,18 +696,17 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
 def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboardMarkup]:
     display_name = html.escape(user_name)
     panel = (
-        f"⚡ <b>TIKTOK, FACEBOOK & FREE FIRE TOOLKIT</b> ⚡\n"
+        f"⚡ <b>TIKTOK & FACEBOOK TOOLKIT</b> ⚡\n"
         f"<code>────────────────────────────</code>\n"
         f"👋 Xin chào, <b>{display_name}</b>\n"
-        f"Hệ thống đa nhiệm: Tải Media, Trích xuất Audio, Tra cứu OSINT & Game.\n\n"
+        f"Hệ thống đa nhiệm: Tải Media, Trích xuất Audio & Tra cứu OSINT.\n\n"
         f"📌 <b>LỆNH TRUY CẬP NHANH:</b>\n"
         f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto No-WM)\n"
         f"• 🎵 <b>Tách nhạc:</b> <code>/music &lt;link&gt;</code>\n"
         f"• 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
         f"• 🔵 <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
-        f"• 🎮 <b>Info Free Fire:</b> <code>/ff &lt;uid&gt;</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"🟢 <b>Status:</b> <i>Engine Core v2.7 Online</i>"
+        f"🟢 <b>Status:</b> <i>Engine Core v2.6 Online</i>"
     )
 
     keyboard = [
@@ -799,7 +719,6 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
             InlineKeyboardButton("🔵 Info Facebook", callback_data="panel_guide_fb"),
         ],
         [
-            InlineKeyboardButton("🎮 Info Free Fire", callback_data="panel_guide_ff"),
             InlineKeyboardButton("📊 Server Status", callback_data="panel_status"),
         ],
     ]
@@ -842,8 +761,7 @@ async def build_server_status_panel() -> str:
         f"├ 🔁 <b>Fallback CDN:</b> 🟢 Standby Ready\n"
         f"├ 🎵 <b>Audio Extractor:</b> 🟢 Operational\n"
         f"├ 🔍 <b>TikTok Inspector:</b> 🟢 Operational\n"
-        f"├ 🔵 <b>Facebook Multi-OSINT:</b> 🟢 Connected\n"
-        f"└ 🎮 <b>Free Fire Engine:</b> 🟢 Connected\n"
+        f"└ 🔵 <b>Facebook Multi-OSINT:</b> 🟢 Connected\n"
         f"<code>────────────────────────────</code>\n"
         f"🛡 <b>Anti-WAF:</b> <i>Bypass Active</i>"
     )
@@ -943,70 +861,12 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
-    elif data == "panel_guide_ff":
-        text = (
-            "🎮 <b>TRA CỨU PROFILE FREE FIRE</b>\n"
-            "<code>────────────────────────────</code>\n"
-            "• Cú pháp: <code>/ff &lt;uid&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/ff 123456789</code>\n"
-            "• <b>Dữ liệu trả về:</b> Tên, Level, Lượt thích, Khu vực, Điểm Rank Tử Chiến (CS), Điểm Sinh Tồn (BR) và Quân đoàn."
-        )
-        try:
-            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
-        except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
-
     elif data == "panel_status":
         text = await build_server_status_panel()
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
         except Exception:
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
-
-
-# LỆNH /ff <uid>
-async def cmd_ff(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        return
-
-    if not context.args:
-        help_panel = (
-            f"╔════════ ⚠️ <b>THIẾU THAM SỐ</b> ════════╗\n"
-            f"║ 📌 <b>Cú pháp:</b> <code>/ff &lt;uid&gt;</code>\n"
-            f"║ 💡 <i>Ví dụ: <code>/ff 123456789</code></i>\n"
-            f"╚════════════════════════════════════╝"
-        )
-        try:
-            await update.message.reply_photo(photo=IMG_FF, caption=help_panel, parse_mode=ParseMode.HTML)
-        except Exception:
-            await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
-        return
-
-    input_uid = context.args[0].strip()
-    status_msg = await update.message.reply_text(
-        f"⚡ <i>Đang truy vấn dữ liệu Free Fire cho UID:</i> <code>{html.escape(input_uid)}</code>...",
-        parse_mode=ParseMode.HTML,
-    )
-
-    res = await check_ff_profile(input_uid)
-    await status_msg.delete()
-
-    if res.get("success"):
-        try:
-            await update.message.reply_photo(photo=IMG_FF, caption=res["formatted_text"], parse_mode=ParseMode.HTML)
-        except Exception:
-            await update.message.reply_text(res["formatted_text"], parse_mode=ParseMode.HTML)
-    else:
-        err_msg = res.get("error", "Không thể lấy thông tin tài khoản.")
-        err_panel = (
-            f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-            f"❌ <b>TRA CỨU FREE FIRE THẤT BẠI</b>\n"
-            f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
-            f"🆔 <b>UID:</b> <code>{html.escape(input_uid)}</code>\n"
-            f"⚠️ <b>Lỗi:</b> <i>{html.escape(err_msg)}</i>\n"
-            f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
-        )
-        await update.message.reply_text(err_panel, parse_mode=ParseMode.HTML)
 
 
 # LỆNH /fb <link_hoặc_uid>
@@ -1290,7 +1150,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║          Engine: python-telegram-bot v20+            ║\n"
-        "║   Features: TikTok, Facebook & Free Fire Check       ║\n"
+        "║      Features: TikTok Auto-Down, Music & FB Info     ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -1304,7 +1164,6 @@ def main():
     app.add_handler(CommandHandler("music", cmd_music))
     app.add_handler(CommandHandler("downmusic", cmd_music))
     app.add_handler(CommandHandler("fb", cmd_fb))
-    app.add_handler(CommandHandler("ff", cmd_ff))
 
     # Callbacks
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
@@ -1318,3 +1177,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
