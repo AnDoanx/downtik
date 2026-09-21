@@ -1,10 +1,10 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import asyncio
 from datetime import datetime
 import html
+import io
 import logging
 import os
 import re
@@ -86,9 +86,38 @@ async def get_http_session() -> aiohttp.ClientSession:
     return HTTP_SESSION
 
 
+# ================= HÀM HỖ TRỢ TẢI FILE MEDIA (CHỐNG LỖI TELEGRAM CDN TIMEOUT) =================
+async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
+    """Tải trực tiếp stream từ CDN vào RAM để Telegram gửi không bị lỗi chặn hoặc timeout."""
+    session = await get_http_session()
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=40)) as resp:
+            if resp.status == 200:
+                content_len = resp.headers.get("Content-Length")
+                if content_len and int(content_len) > max_size_mb * 1024 * 1024:
+                    return None
+                data = await resp.read()
+                buf = io.BytesIO(data)
+                buf.name = "media.mp4"
+                return buf
+    except Exception as e:
+        logger.error(f"Lỗi tải stream media: {e}")
+    return None
+
+
+def ensure_full_url(url: str) -> str:
+    """Chuẩn hóa đường dẫn tương đối từ TikWM."""
+    if not url:
+        return ""
+    if url.startswith("//"):
+        return f"https:{url}"
+    if url.startswith("/"):
+        return f"https://www.tikwm.com{url}"
+    return url
+
+
 # ================= THUẬT TOÁN ĐỊNH NĂM TẠO TÀI KHOẢN THEO UID =================
 def estimate_fb_creation_details(uid: str) -> str:
-    """Xác định năm khởi tạo tài khoản Facebook dựa theo mốc phân bổ UID."""
     if not uid.isdigit():
         return "Không công khai"
 
@@ -195,7 +224,7 @@ async def get_fb_id(input_str: str) -> str | None:
     return None
 
 
-# ================= SCRAPER NÂNG CAO: FOLLOWER, BIO, SOCIAL LINKS =================
+# ================= SCRAPER PROFILE FACEBOOK =================
 async def scrape_fb_full_details(uid: str) -> dict:
     session = await get_http_session()
     headers = {
@@ -219,7 +248,6 @@ async def scrape_fb_full_details(uid: str) -> dict:
         async with session.get(f"https://mbasic.facebook.com/{uid}", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
             if r.status == 200:
                 html_text = await r.text()
-
                 fol_match = re.search(r'(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)', html_text, re.IGNORECASE)
                 if fol_match:
                     extracted["followers"] = fol_match.group(1).replace(".", "").replace(",", "").strip()
@@ -238,7 +266,6 @@ async def scrape_fb_full_details(uid: str) -> dict:
         async with session.get(f"https://mbasic.facebook.com/{uid}/about", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
             if r.status == 200:
                 raw_html = await r.text()
-
                 m_home = re.search(r'(?:Đến từ|From)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                 if not m_home:
                     m_home = re.search(r'(?:Quê quán|Hometown)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
@@ -271,7 +298,6 @@ async def scrape_fb_full_details(uid: str) -> dict:
                     "discord.gg", "linkedin.com", "pinterest.com", "spotify.com"
                 ]
                 found_links = set()
-
                 for raw_link in redirect_links:
                     decoded_url = urllib.parse.unquote(raw_link)
                     if any(domain in decoded_url for domain in social_domains):
@@ -285,7 +311,6 @@ async def scrape_fb_full_details(uid: str) -> dict:
     return extracted
 
 
-# ================= HÀM QUÉT DỮ LIỆU PROFILE FACEBOOK ĐA TẦNG =================
 async def fetch_fb_info(uid: str) -> dict | None:
     session = await get_http_session()
     result = {
@@ -318,37 +343,10 @@ async def fetch_fb_info(uid: str) -> dict | None:
                     result["username"] = res.get("username")
                     result["updated_time"] = res.get("updated_time")
                     result["about"] = res.get("about")
-
                     if isinstance(res.get("hometown"), dict):
                         result["hometown"] = res["hometown"].get("name")
-                    elif res.get("hometown"):
-                        result["hometown"] = str(res.get("hometown"))
-
                     if isinstance(res.get("location"), dict):
                         result["location"] = res["location"].get("name")
-                    elif res.get("location"):
-                        result["location"] = str(res.get("location"))
-
-                    if res.get("work") and isinstance(res["work"], list):
-                        work_items = []
-                        for w in res["work"][:2]:
-                            employer = w.get("employer", {}).get("name")
-                            pos = w.get("position", {}).get("name")
-                            if employer and pos:
-                                work_items.append(f"{pos} tại {employer}")
-                            elif employer:
-                                work_items.append(f"Làm việc tại {employer}")
-                        if work_items:
-                            result["work"] = " | ".join(work_items)
-
-                    if res.get("education") and isinstance(res["education"], list):
-                        edu_items = []
-                        for ed in res["education"][:2]:
-                            school = ed.get("school", {}).get("name")
-                            if school:
-                                edu_items.append(school)
-                        if edu_items:
-                            result["education"] = " | ".join(edu_items)
                     break
         except Exception as e:
             logger.warning(f"Graph API pass: {e}")
@@ -369,24 +367,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
     if not result["education"] and scraped.get("education"):
         result["education"] = scraped["education"]
 
-    if not (result["followers"] and result["about"]):
-        try:
-            scraper_url = f"https://api.findids.net/api/facebook/profile?id={uid}"
-            async with session.get(scraper_url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
-                if resp.status == 200:
-                    s_data = await resp.json(content_type=None)
-                    if isinstance(s_data, dict) and s_data.get("data"):
-                        info = s_data["data"]
-                        result["name"] = result.get("name") or info.get("name")
-                        result["followers"] = result.get("followers") or info.get("follower") or info.get("followers")
-                        result["hometown"] = result.get("hometown") or info.get("hometown")
-                        result["location"] = result.get("location") or info.get("location")
-                        result["work"] = result.get("work") or info.get("work")
-                        result["education"] = result.get("education") or info.get("education")
-                        result["about"] = result.get("about") or info.get("bio")
-        except Exception:
-            pass
-
     if result["name"] or result["id"]:
         return result
     return None
@@ -396,7 +376,6 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     uid = str(data.get("id", "—"))
     name = html.escape(str(data.get("name") or "Người dùng Facebook"))
     username = html.escape(str(data.get("username") or "—"))
-
     raw_gender = data.get("gender")
     gender_map = {"male": "Nam 🚹", "female": "Nữ 🚺"}
     gender = gender_map.get(str(raw_gender).lower(), "Không công khai 🔒")
@@ -409,54 +388,26 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         followers_str = "<i>Không công khai hoặc tắt follow</i>"
 
     raw_created = data.get("created_time")
-    if raw_created and raw_created != "None":
-        created_str = str(raw_created).split("T")[0]
-    else:
-        created_str = estimate_fb_creation_details(uid)
-
-    raw_updated = data.get("updated_time")
-    if raw_updated and raw_updated != "None":
-        try:
-            up_dt = datetime.fromisoformat(raw_updated.split("+")[0].replace("Z", ""))
-            updated_str = up_dt.strftime("%d/%m/%Y lúc %H:%M")
-        except Exception:
-            updated_str = str(raw_updated).replace("T", " ")
-    else:
-        updated_str = "Theo thời gian thực"
-
-    hometown = html.escape(str(data.get("hometown") or "Không công khai"))
-    location = html.escape(str(data.get("location") or "Không công khai"))
-    about = html.escape(str(data.get("about") or "Không có tiểu sử."))
-    work = html.escape(str(data.get("work") or "Không công khai"))
-    education = html.escape(str(data.get("education") or "Không công khai"))
+    created_str = str(raw_created).split("T")[0] if raw_created and raw_created != "None" else estimate_fb_creation_details(uid)
 
     badge = "💎 ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
     avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
 
     social_lines = []
-    social_links = data.get("social_links", [])
-    if social_links:
-        for link in social_links:
-            clean_tag = link.split("/")[-1]
-            if "instagram.com" in link:
-                social_lines.append(f"• 📸 <b>Instagram:</b> <a href='{link}'>@{clean_tag}</a>")
-            elif "tiktok.com" in link:
-                social_lines.append(f"• 🎬 <b>TikTok:</b> <a href='{link}'>@{clean_tag}</a>")
-            elif "youtube.com" in link or "youtu.be" in link:
-                social_lines.append(f"• 🔴 <b>YouTube:</b> <a href='{link}'>Xem kênh</a>")
-            elif "t.me" in link:
-                social_lines.append(f"• ✈️ <b>Telegram:</b> <a href='{link}'>@{clean_tag}</a>")
-            elif "threads.net" in link:
-                social_lines.append(f"• 🧵 <b>Threads:</b> <a href='{link}'>@{clean_tag}</a>")
-            elif "twitter.com" in link or "x.com" in link:
-                social_lines.append(f"• 🐦 <b>X/Twitter:</b> <a href='{link}'>@{clean_tag}</a>")
-            elif "github.com" in link:
-                social_lines.append(f"• 🐙 <b>GitHub:</b> <a href='{link}'>{clean_tag}</a>")
-            else:
-                social_lines.append(f"• 🔗 <b>Khác:</b> <a href='{link}'>{link}</a>")
-        social_display = "\n".join(social_lines)
-    else:
-        social_display = "<i>Không có mạng xã hội liên kết ngoài</i>"
+    for link in data.get("social_links", []):
+        clean_tag = link.split("/")[-1]
+        if "instagram.com" in link:
+            social_lines.append(f"• 📸 <b>Instagram:</b> <a href='{link}'>@{clean_tag}</a>")
+        elif "tiktok.com" in link:
+            social_lines.append(f"• 🎬 <b>TikTok:</b> <a href='{link}'>@{clean_tag}</a>")
+        elif "youtube.com" in link:
+            social_lines.append(f"• 🔴 <b>YouTube:</b> <a href='{link}'>Xem kênh</a>")
+        elif "t.me" in link:
+            social_lines.append(f"• ✈️ <b>Telegram:</b> <a href='{link}'>@{clean_tag}</a>")
+        else:
+            social_lines.append(f"• 🔗 <b>Khác:</b> <a href='{link}'>{link}</a>")
+
+    social_display = "\n".join(social_lines) if social_lines else "<i>Không có mạng xã hội liên kết ngoài</i>"
 
     panel = (
         f"⚡ <b>HỒ SƠ FACEBOOK PRO CHI TIẾT</b> ⚡\n"
@@ -469,14 +420,13 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         f"<code>────────────────────────────</code>\n"
         f"👥 <b>Người theo dõi:</b> {followers_str}\n"
         f"🗓 <b>Ước tính tạo nick:</b> <code>{created_str}</code>\n"
-        f"🔄 <b>Cập nhật gần nhất:</b> <code>{updated_str}</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"🏡 <b>Quê quán:</b> {hometown}\n"
-        f"📍 <b>Nơi sống:</b> {location}\n"
-        f"💼 <b>Công việc:</b> {work}\n"
-        f"🎓 <b>Học vấn:</b> {education}\n"
+        f"🏡 <b>Quê quán:</b> {html.escape(str(data.get('hometown') or 'Không công khai'))}\n"
+        f"📍 <b>Nơi sống:</b> {html.escape(str(data.get('location') or 'Không công khai'))}\n"
+        f"💼 <b>Công việc:</b> {html.escape(str(data.get('work') or 'Không công khai'))}\n"
+        f"🎓 <b>Học vấn:</b> {html.escape(str(data.get('education') or 'Không công khai'))}\n"
         f"<code>────────────────────────────</code>\n"
-        f"📝 <b>Tiểu sử:</b>\n<i>« {about} »</i>\n"
+        f"📝 <b>Tiểu sử:</b>\n<i>« {html.escape(str(data.get('about') or 'Không có tiểu sử.'))} »</i>\n"
         f"<code>────────────────────────────</code>\n"
         f"🌐 <b>MẠNG XÃ HỘI GẮN KÈM:</b>\n"
         f"{social_display}\n"
@@ -486,27 +436,23 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     return panel, avatar_url
 
 
-# ================= GIẢI NÉN LINK RÚT GỌN TIKTOK =================
+# ================= GIẢI NÉN LINK TIKTOK =================
 async def resolve_tiktok_url(url: str) -> str:
     session = await get_http_session()
     clean = url.strip()
-    if "vt.tiktok.com" in clean or "vm.tiktok.com" in clean:
+    if any(short in clean for short in ["vt.tiktok.com", "vm.tiktok.com", "v.douyin.com"]):
         try:
-            async with session.head(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with session.get(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 return str(resp.url)
-        except Exception:
-            try:
-                async with session.get(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    return str(resp.url)
-            except Exception as e:
-                logger.error(f"Unshorten error: {e}")
+        except Exception as e:
+            logger.error(f"Unshorten error: {e}")
     return clean
 
 
 # ================= HÀM XỬ LÝ DOWNLOAD TIKTOK =================
-async def tikwm_req(endpoint: str = "", params: dict = None):
+async def tikwm_req(params: dict):
     session = await get_http_session()
-    url = f"{TIKWM_BASE}{endpoint}" if endpoint else TIKWM_BASE
+    url = TIKWM_BASE
 
     post_headers = {
         **TIK_HEADERS,
@@ -514,8 +460,9 @@ async def tikwm_req(endpoint: str = "", params: dict = None):
         "X-Requested-With": "XMLHttpRequest",
     }
 
+    # Thử POST với tham số hd=1
     try:
-        async with session.post(url, data=params or {}, headers=post_headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.post(url, data=params, headers=post_headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
                 data = await resp.json(content_type=None)
                 if data and data.get("code") == 0:
@@ -523,8 +470,9 @@ async def tikwm_req(endpoint: str = "", params: dict = None):
     except Exception as e:
         logger.warning(f"TikWM POST fail: {e}")
 
+    # Fallback GET
     try:
-        async with session.get(url, params=params or {}, headers=TIK_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(url, params=params, headers=TIK_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
                 data = await resp.json(content_type=None)
                 if data and data.get("code") == 0:
@@ -575,6 +523,7 @@ async def fallback_tik_download(tiktok_url: str):
                             "music_info": {
                                 "title": "Original Sound",
                                 "author": j.get("author", "TikTok"),
+                                "play": music_url,
                             },
                             "images": images,
                         },
@@ -598,12 +547,10 @@ async def fetch_tiktok_user_info(username: str) -> dict:
         return {"error": str(e)}
 
 
-# ================= GIẢI MÃ NGÀY TẠO TIKTOK TỪ SNOWFLAKE UID =================
 def get_tiktok_creation_time(uid: str) -> str:
-    """Giải mã timestamp ngày tạo tài khoản từ 64-bit Snowflake ID của TikTok."""
     try:
         val = int(uid)
-        timestamp = val >> 32  # 32-bit đầu là Unix timestamp
+        timestamp = val >> 32
         if 1400000000 <= timestamp <= 2000000000:
             dt = datetime.fromtimestamp(timestamp)
             return dt.strftime("%Y-%m-%d | %H:%M:%S")
@@ -612,7 +559,6 @@ def get_tiktok_creation_time(uid: str) -> str:
     return "Không xác định"
 
 
-# ================= GIAO DIỆN PANEL TIKTOK THEO YÊU CẦU =================
 def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     clean_user = html.escape(username.lstrip("@"))
 
@@ -634,35 +580,22 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     unique_id = html.escape(str(u.get("uniqueId") or u.get("unique_id") or username).lstrip("@"))
     uid = str(u.get("id") or u.get("uid") or "0")
 
-    # Trạng thái tài khoản
     is_private = u.get("privateAccount") or u.get("is_private") or False
     status_str = "🔒 Riêng tư" if is_private else "🌐 Công khai"
-
-    # Tích xanh / Xác minh
     is_verified = u.get("verified") or u.get("customVerify") or False
     verified_str = "✅ Đã xác minh" if is_verified else "❌ Chưa xác minh"
-
-    # Ngôn ngữ / Vùng
     language = html.escape(str(u.get("language") or u.get("region") or "vi").lower())
-
-    # Mô tả / Tiểu sử
-    bio_raw = str(u.get("signature") or u.get("bio") or "Không có tiểu sử.")
-    bio = html.escape(bio_raw)
-
-    # Bán hàng (TikTok Shop / Commerce)
+    bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
     has_shop = u.get("commerceUserInfo", {}).get("commerceUser") or u.get("is_star") or False
     shop_str = "✅ Có" if has_shop else "❌ Không"
 
-    # Chỉ số thống kê
     followers = s.get("followerCount") or s.get("followers") or 0
     following = s.get("followingCount") or s.get("following") or 0
     videos = s.get("videoCount") or s.get("video") or 0
     hearts = s.get("heartCount") or s.get("hearts") or s.get("heart") or 0
     friends = s.get("friendCount") or 0
 
-    # Tính ngày tạo từ UID
     created_time_str = get_tiktok_creation_time(uid)
-
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
 
     panel = (
@@ -681,8 +614,7 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
         f"   ├ 👥 Follower:   <code>{followers:,}</code>\n"
         f"   ├ 👤 Following:  <code>{following:,}</code>\n"
         f"   ├ 🎥 Video:      <code>{videos:,}</code>\n"
-        f"   ├ ❤️ Lượt thích: <code>{hearts:,}</code>\n"
-        f"   └ 👫 Bạn bè:     <code>{friends:,}</code>\n"
+        f"   └ ❤️ Lượt thích: <code>{hearts:,}</code>\n"
         f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
         f"⏰ Ngày tạo: <code>{created_time_str}</code>\n"
         f"🔗 Link: <a href='https://www.tiktok.com/@{unique_id}'>TikTok Profile</a>\n"
@@ -699,14 +631,14 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
         f"⚡ <b>TIKTOK & FACEBOOK TOOLKIT</b> ⚡\n"
         f"<code>────────────────────────────</code>\n"
         f"👋 Xin chào, <b>{display_name}</b>\n"
-        f"Hệ thống đa nhiệm: Tải Media, Trích xuất Audio & Tra cứu OSINT.\n\n"
+        f"Hệ thống đa nhiệm: Tải Media HD, Trích xuất Audio & Tra cứu Profile.\n\n"
         f"📌 <b>LỆNH TRUY CẬP NHANH:</b>\n"
-        f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto No-WM)\n"
+        f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto Full HD No-WM)\n"
         f"• 🎵 <b>Tách nhạc:</b> <code>/music &lt;link&gt;</code>\n"
         f"• 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
         f"• 🔵 <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"🟢 <b>Status:</b> <i>Engine Core v2.6 Online</i>"
+        f"🟢 <b>Status:</b> <i>Engine Core v2.7 Online</i>"
     )
 
     keyboard = [
@@ -752,18 +684,14 @@ async def build_server_status_panel() -> str:
         f"🖥 <b>SYSTEM MONITOR & METRICS</b>\n"
         f"<code>────────────────────────────</code>\n"
         f"⏱ <b>Thời gian chạy:</b> <code>{uptime_str}</code>\n"
-        f"⚡ <b>Độ trễ (Ping API):</b> <code>{ping_ms} ms</code>\n"
+        f"⚡ <b>Độ trễ:</b> <code>{ping_ms} ms</code>\n"
         f"🧠 <b>Bộ nhớ RAM:</b> <code>{ram_str}</code>\n"
-        f"⚙️ <b>Async Loop:</b> <code>Active (Python 3.11+)</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"📡 <b>TRẠNG THÁI CÁC DỊCH VỤ:</b>\n"
-        f"├ 🎬 <b>TikWM Core:</b> 🟢 Operational\n"
-        f"├ 🔁 <b>Fallback CDN:</b> 🟢 Standby Ready\n"
-        f"├ 🎵 <b>Audio Extractor:</b> 🟢 Operational\n"
-        f"├ 🔍 <b>TikTok Inspector:</b> 🟢 Operational\n"
-        f"└ 🔵 <b>Facebook Multi-OSINT:</b> 🟢 Connected\n"
-        f"<code>────────────────────────────</code>\n"
-        f"🛡 <b>Anti-WAF:</b> <i>Bypass Active</i>"
+        f"📡 <b>TRẠNG THÁI HỆ THỐNG:</b>\n"
+        f"├ 🎬 <b>TikWM Core HD:</b> 🟢 Operational\n"
+        f"├ 🔁 <b>Fallback LoveTik:</b> 🟢 Standby Ready\n"
+        f"├ 🎵 <b>Audio Ingestion:</b> 🟢 Stream Buffered\n"
+        f"└ 🔵 <b>Facebook Graph:</b> 🟢 Connected"
     )
     return status_panel
 
@@ -811,11 +739,11 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_down":
         text = (
-            "📥 <b>HƯỚNG DẪN TẢI TIKTOK</b>\n"
+            "📥 <b>HƯỚNG DẪN TẢI TIKTOK FULL HD</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Gửi link video hoặc album ảnh trực tiếp vào khung chat.\n"
-            "• Bot tự động tải về file <b>không watermark HD</b>.\n"
-            "• Hỗ trợ mọi định dạng link (kể cả link rút gọn <code>vt.tiktok.com</code>)."
+            "• Bot tự động tải về chuẩn <b>HD / 1080p không logo</b>.\n"
+            "• Tương thích tất cả link ngắn như <code>vt.tiktok.com</code>."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -824,11 +752,11 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_music":
         text = (
-            "🎵 <b>TRÍCH XUẤT AUDIO MP3</b>\n"
+            "🎵 <b>TRÍCH XUẤT AUDIO GỐC</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/music &lt;link_tiktok&gt;</code>\n"
-            "• Hoặc bấm trực tiếp nút <b>[Tải nhạc]</b> bên dưới mỗi video tải về.\n"
-            "• Trả về file âm thanh chất lượng cao kèm thông tin nghệ sĩ."
+            "• Hoặc bấm nút <b>[Tải nhạc]</b> ngay dưới mỗi video đã tải.\n"
+            "• Trả về file âm thanh MP3 chất lượng cao nhất."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -837,11 +765,10 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_info":
         text = (
-            "🔎 <b>TRA CỨU TIKTOK USER</b>\n"
+            "🔎 <b>TRA CỨU TIKTOK PROFILE</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/getinfo &lt;username&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/getinfo tiktok</code>\n"
-            "• Trả về: Thẻ bảng chi tiết, trạng thái bán hàng, bạn bè và ngày tạo chính xác."
+            "• <i>Ví dụ:</i> <code>/getinfo tiktok</code>"
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -853,8 +780,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "🔵 <b>TRA CỨU FACEBOOK PROFILE PRO</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc <code>/fb https://facebook.com/zuck</code>\n"
-            "• <b>Dữ liệu bóc tách:</b> Tên, UID, Giới tính, Follower, Năm tạo, Nơi sống, Học vấn, Công việc, Toàn bộ tiểu sử & Các mạng xã hội gắn kèm."
+            "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc link trang cá nhân bất kỳ."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -869,7 +795,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
 
-# LỆNH /fb <link_hoặc_uid>
+# LỆNH /fb
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -895,7 +821,7 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!", parse_mode=ParseMode.HTML)
         return
 
-    await status_msg.edit_text(f"📡 <i>Đang quét dữ liệu OSINT, Follower & MXH cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
+    await status_msg.edit_text(f"📡 <i>Đang quét dữ liệu OSINT cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
     data = await fetch_fb_info(uid)
 
     if not data:
@@ -917,13 +843,13 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Nút callback tải nhạc dưới video
 async def handle_download_music_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("⏳ Đang trích xuất audio gốc...", show_alert=False)
+    await query.answer("⏳ Đang tải audio...", show_alert=False)
     data = query.data
 
     video_id = data.replace("dlmusic_", "")
     tik_url = f"https://www.tiktok.com/@a/video/{video_id}"
 
-    api_res = await tikwm_req("", {"url": tik_url})
+    api_res = await tikwm_req({"url": tik_url, "hd": 1})
     if not api_res or api_res.get("code") != 0:
         api_res = await fallback_tik_download(tik_url)
 
@@ -932,9 +858,11 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
         return
 
     res = api_res["data"]
-    music_url = res.get("music") or res.get("music_info", {}).get("play")
+    raw_music = res.get("music") or res.get("music_info", {}).get("play")
+    music_url = ensure_full_url(raw_music)
+
     if not music_url:
-        await query.message.reply_text("❌ Video này bị tắt tiếng hoặc không có track âm thanh riêng biệt.")
+        await query.message.reply_text("❌ Video này bị tắt tiếng hoặc không có track âm thanh riêng.")
         return
 
     music_title = html.escape(res.get("music_info", {}).get("title") or "TikTok Audio")
@@ -948,19 +876,29 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
         f"╚════════════════════════════════════╝"
     )
 
+    # Thử gửi bằng File Buffer qua RAM để chống lỗi CDN timeout
+    stream_file = await download_file_stream(music_url, max_size_mb=30)
     try:
-        await query.message.reply_audio(
-            audio=music_url,
-            title=music_title,
-            performer=music_author,
-            caption=audio_panel,
-            parse_mode=ParseMode.HTML,
-            read_timeout=60,
-            write_timeout=60,
-        )
+        if stream_file:
+            stream_file.name = f"{video_id}.mp3"
+            await query.message.reply_audio(
+                audio=stream_file,
+                title=music_title,
+                performer=music_author,
+                caption=audio_panel,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await query.message.reply_audio(
+                audio=music_url,
+                title=music_title,
+                performer=music_author,
+                caption=audio_panel,
+                parse_mode=ParseMode.HTML,
+            )
     except Exception as e:
-        logger.error(f"Lỗi gửi audio: {e}")
-        await query.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
+        logger.error(f"Lỗi gửi audio callback: {e}")
+        await query.message.reply_text(f"❌ Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.")
 
 
 # Lệnh /music hoặc /downmusic
@@ -986,21 +924,22 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Vui lòng cung cấp link TikTok hợp lệ.", parse_mode=ParseMode.HTML)
         return
 
-    msg = await update.message.reply_text("⏳ <i>Đang bóc tách file âm thanh...</i>", parse_mode=ParseMode.HTML)
+    msg = await update.message.reply_text("⏳ <i>Đang bóc tách file âm thanh gốc...</i>", parse_mode=ParseMode.HTML)
 
     target_url = await resolve_tiktok_url(raw_url)
-    clean_url = target_url.split("?")[0] if "vt.tiktok.com" not in target_url else target_url
 
-    data = await tikwm_req("", {"url": clean_url})
+    data = await tikwm_req({"url": target_url, "hd": 1})
     if not data or data.get("code") != 0:
-        data = await fallback_tik_download(clean_url)
+        data = await fallback_tik_download(target_url)
 
     if not data or data.get("code") != 0 or not data.get("data"):
         await msg.edit_text("❌ <b>Không trích xuất được:</b> Video riêng tư, bị xoá hoặc link không hợp lệ.")
         return
 
     res = data["data"]
-    music_url = res.get("music") or res.get("music_info", {}).get("play")
+    raw_music = res.get("music") or res.get("music_info", {}).get("play")
+    music_url = ensure_full_url(raw_music)
+
     if not music_url:
         await msg.edit_text("❌ Video này không có âm thanh hoặc bị tắt tiếng do bản quyền.")
         return
@@ -1016,17 +955,27 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"╚════════════════════════════════════════════╝"
     )
 
+    stream_file = await download_file_stream(music_url, max_size_mb=30)
     await msg.delete()
+
     try:
-        await update.message.reply_audio(
-            audio=music_url,
-            title=music_title,
-            performer=music_author,
-            caption=audio_panel,
-            parse_mode=ParseMode.HTML,
-            read_timeout=60,
-            write_timeout=60,
-        )
+        if stream_file:
+            stream_file.name = f"{res.get('id', 'audio')}.mp3"
+            await update.message.reply_audio(
+                audio=stream_file,
+                title=music_title,
+                performer=music_author,
+                caption=audio_panel,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await update.message.reply_audio(
+                audio=music_url,
+                title=music_title,
+                performer=music_author,
+                caption=audio_panel,
+                parse_mode=ParseMode.HTML,
+            )
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
         await update.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
@@ -1067,7 +1016,7 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
-# TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK
+# TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK (ƯU TIÊN HD VÀ TỰ SỬA LINK)
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -1080,18 +1029,19 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         raw_url = match.group(0)
 
-        msg = await update.message.reply_text("⏳ <i>Đang bóc tách dữ liệu đa phương tiện...</i>", parse_mode=ParseMode.HTML)
+        msg = await update.message.reply_text("⏳ <i>Đang tải dữ liệu HD...</i>", parse_mode=ParseMode.HTML)
 
+        # 1. Giải mã link rút gọn (vt.tiktok.com)
         target_url = await resolve_tiktok_url(raw_url)
-        clean_url = target_url.split("?")[0] if "vt.tiktok.com" not in target_url else target_url
 
-        data = await tikwm_req("", {"url": clean_url, "hd": 1})
+        # 2. Gọi TikWM với cờ hd=1
+        data = await tikwm_req({"url": target_url, "hd": 1})
         if not data or data.get("code") != 0:
-            logger.warning("TikWM không phản hồi, chuyển sang Fallback LoveTik...")
-            data = await fallback_tik_download(clean_url)
+            logger.warning("TikWM không phản hồi hoặc lỗi, dùng fallback LoveTik...")
+            data = await fallback_tik_download(target_url)
 
         if not data or data.get("code") != 0 or not data.get("data"):
-            await msg.edit_text("❌ <b>Tải thất bại:</b> Video đã bị xóa, tài khoản riêng tư hoặc link sai.")
+            await msg.edit_text("❌ <b>Tải thất bại:</b> Video đã bị xóa, tài khoản riêng tư hoặc link không đúng.")
             return
 
         res = data["data"]
@@ -1101,7 +1051,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         music_title = html.escape(res.get("music_info", {}).get("title") or "Original Sound")
 
         caption = (
-            f"╔══════════ 🎬 <b>TIKTOK DOWNLOAD</b> ══════════╗\n"
+            f"╔══════════ 🎬 <b>TIKTOK HD DOWNLOAD</b> ══════════╗\n"
             f"║ 📝 <b>Tiêu đề:</b> {title}\n"
             f"║ 👤 <b>Tác giả:</b> {author}\n"
             f"║ 🎵 <b>Âm thanh:</b> <i>{music_title}</i>\n"
@@ -1117,30 +1067,49 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             keyboard.append([InlineKeyboardButton("🎵 Tải nhạc MP3 của video", callback_data=f"dlmusic_{video_id}")])
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
+        # Trực hợp Album ảnh
+        if res.get("images"):
+            await msg.delete()
+            media = [InputMediaPhoto(media=ensure_full_url(img)) for img in res["images"][:10]]
+            await update.message.reply_media_group(media=media)
+            await update.message.reply_photo(photo=IMG_DOWN, caption=caption, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            return
+
+        # Lấy URL HD (Ưu tiên hdplay -> play) và chuẩn hóa
+        raw_video_url = res.get("hdplay") or res.get("play")
+        video_url = ensure_full_url(raw_video_url)
+
+        if not video_url:
+            await msg.edit_text("❌ Không trích xuất được link video chất lượng cao.")
+            return
+
+        # Tải stream video qua RAM để tránh lỗi CDN chặn Telegram Server
+        stream_video = await download_file_stream(video_url, max_size_mb=50)
+
+        await msg.delete()
         try:
-            if res.get("images"):
-                await msg.delete()
-                media = [InputMediaPhoto(media=img) for img in res["images"][:10]]
-                await update.message.reply_media_group(media=media)
-                await update.message.reply_photo(photo=IMG_DOWN, caption=caption, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            if stream_video:
+                stream_video.name = f"{video_id or 'tiktok'}_hd.mp4"
+                await update.message.reply_video(
+                    video=stream_video,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup,
+                    read_timeout=90,
+                    write_timeout=90,
+                )
             else:
-                video_url = res.get("hdplay") or res.get("play")
-                if not video_url:
-                    await msg.edit_text("❌ Không trích xuất được link video chất lượng cao.")
-                    return
-                await msg.delete()
                 await update.message.reply_video(
                     video=video_url,
                     caption=caption,
                     parse_mode=ParseMode.HTML,
                     reply_markup=reply_markup,
-                    read_timeout=60,
-                    write_timeout=60,
+                    read_timeout=90,
+                    write_timeout=90,
                 )
         except Exception as e:
             logger.error(f"Lỗi gửi media: {e}")
-            await update.message.reply_text("❌ Không thể gửi video (Dung lượng vượt giới hạn hoặc CDN timeout).")
-        return
+            await update.message.reply_text("❌ Video vượt quá dung lượng cho phép của Telegram Bot (50MB) hoặc CDN timeout.")
 
 
 # ================= KHỞI CHẠY BOT =================
@@ -1150,7 +1119,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║          Engine: python-telegram-bot v20+            ║\n"
-        "║      Features: TikTok Auto-Down, Music & FB Info     ║\n"
+        "║      Features: TikTok Auto-Down HD & Music Fix       ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -1177,4 +1146,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
