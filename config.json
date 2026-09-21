@@ -1,0 +1,15 @@
+{
+  "allowed_users": [],
+  "api": {
+    "tikwm": "https://www.tikwm.com/api/",
+    "tik_info": "https://ksjdjdmfmxm.x10.mx/tik1.php?user=",
+    "lovetik": "https://lovetik.com/api/ajax/search"
+  },
+  "banners": {
+    "welcome": "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg",
+    "music": "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg",
+    "getinfo": "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg",
+    "down": "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png",
+    "fb": "https://cdn.phototourl.com/member/2026-09-20-9afea8db-8a1c-4ffb-9f41-68c26a82f2f5.jpg"
+  }
+}
