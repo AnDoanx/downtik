@@ -6,18 +6,17 @@ import re
 import aiohttp
 from dotenv import load_dotenv
 
-# Tự động nạp biến môi trường từ .env (hoặc biến trên Railway)
+# Nạp file .env nếu có (dành cho môi trường local)
 load_dotenv()
 
-# Định vị thư mục gốc để đọc file config.json và templates không bao giờ bị lệch đường dẫn
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
-# Đọc file config.json đúng cú pháp (truyền con trỏ file f vào json.load)
+# Đọc cấu hình từ config.json
 try:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         CONFIG = json.load(f)
-except Exception as e:
+except Exception:
     CONFIG = {
         "allowed_users": [],
         "api": {
@@ -27,8 +26,16 @@ except Exception as e:
         "banners": {},
     }
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-FB_TOKENS = [t.strip() for t in os.getenv("FB_TOKENS", "").split(",") if t.strip()]
+# Lấy token từ Railway/ENV, nếu trống sẽ lấy token mặc định
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
+
+DEFAULT_FB_TOKEN = (
+    "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbh"
+    "ERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgB"
+    "pI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
+)
+fb_env = os.getenv("FB_TOKENS", DEFAULT_FB_TOKEN)
+FB_TOKENS = [t.strip() for t in fb_env.split(",") if t.strip()]
 
 TIK_HEADERS = {
     "User-Agent": (
