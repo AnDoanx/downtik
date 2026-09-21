@@ -41,7 +41,10 @@ TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
 # Facebook Graph API & Tokens
 FB_TOKENS = [
-    os.getenv("FB_TOKEN", "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD")
+    os.getenv(
+        "FB_TOKEN",
+        "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD",
+    )
 ]
 
 # Banner Images theo từng tác vụ
@@ -139,7 +142,7 @@ def estimate_fb_creation_details(uid: str) -> str:
     return "Tài khoản bảo mật cao"
 
 
-# ================= HÀM LẤY UID CHÍNH XÁC =================
+# ================= HÀM LẤY UID FACEBOOK =================
 async def get_fb_id(input_str: str) -> str | None:
     clean = input_str.strip()
     if clean.isdigit():
@@ -211,18 +214,15 @@ async def scrape_fb_full_details(uid: str) -> dict:
         "education": None,
     }
 
-    # 1. Quét trang profile chính (Lấy Follower & Bio)
     try:
         async with session.get(f"https://mbasic.facebook.com/{uid}", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
             if r.status == 200:
                 html_text = await r.text()
 
-                # Regex Follower
                 fol_match = re.search(r'(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)', html_text, re.IGNORECASE)
                 if fol_match:
                     extracted["followers"] = fol_match.group(1).replace(".", "").replace(",", "").strip()
 
-                # Regex Bio
                 bio_match = re.search(r'<div class="[^"]*" id="bio">([\s\S]*?)</div>', html_text)
                 if not bio_match:
                     bio_match = re.search(r'intro_bio[^>]*><span>([\s\S]*?)</span>', html_text)
@@ -233,43 +233,36 @@ async def scrape_fb_full_details(uid: str) -> dict:
     except Exception as e:
         logger.warning(f"Lỗi scrape trang cá nhân: {e}")
 
-    # 2. Quét trang About (Lấy quê quán, nơi ở, học vấn, công việc & các liên kết MXH)
     try:
         async with session.get(f"https://mbasic.facebook.com/{uid}/about", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
             if r.status == 200:
                 raw_html = await r.text()
 
-                # Hometown
                 m_home = re.search(r'(?:Đến từ|From)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                 if not m_home:
                     m_home = re.search(r'(?:Quê quán|Hometown)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                 if m_home:
                     extracted["hometown"] = m_home.group(1).strip()
 
-                # Location
                 m_loc = re.search(r'(?:Sống tại|Lives in)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                 if not m_loc:
                     m_loc = re.search(r'(?:Tỉnh/Thành phố hiện tại|Current city)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                 if m_loc:
                     extracted["location"] = m_loc.group(1).strip()
 
-                # Work
                 m_work = re.search(r'(?:Làm việc tại|Works at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                 if m_work:
                     extracted["work"] = f"Làm việc tại {m_work.group(1).strip()}"
 
-                # Education
                 m_edu = re.search(r'(?:Từng học tại|Học tại|Studied at|Studies at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
                 if m_edu:
                     extracted["education"] = m_edu.group(1).strip()
 
-                # Nếu trang chủ chưa tìm ra follower thì bóc tách tại /about
                 if not extracted["followers"]:
                     m_fol = re.search(r'(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)', raw_html, re.IGNORECASE)
                     if m_fol:
                         extracted["followers"] = m_fol.group(1).replace(".", "").replace(",", "").strip()
 
-                # Quét các liên kết MXH gắn ngoài
                 redirect_links = re.findall(r'href="https?://(?:[a-z0-9-]+\.)?facebook\.com/l\.php\?u=([^"&]+)', raw_html)
                 social_domains = [
                     "instagram.com", "tiktok.com", "youtube.com", "youtu.be",
@@ -311,7 +304,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
         "social_links": [],
     }
 
-    # BƯỚC 1: Lấy qua Graph API
     fields_target = "id,name,gender,is_verified,short_name,username,updated_time,about,hometown,location,work,education"
     for token in FB_TOKENS:
         try:
@@ -360,7 +352,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
         except Exception as e:
             logger.warning(f"Graph API pass: {e}")
 
-    # BƯỚC 2: Quét nâng cao Follower, Tiểu sử & Mạng xã hội liên kết
     scraped = await scrape_fb_full_details(uid)
     if scraped.get("followers"):
         result["followers"] = scraped["followers"]
@@ -377,7 +368,6 @@ async def fetch_fb_info(uid: str) -> dict | None:
     if not result["education"] and scraped.get("education"):
         result["education"] = scraped["education"]
 
-    # BƯỚC 3: Dự phòng API bên thứ 3
     if not (result["followers"] and result["about"]):
         try:
             scraper_url = f"https://api.findids.net/api/facebook/profile?id={uid}"
@@ -442,7 +432,6 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     badge = "💎 ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
     avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
 
-    # Định dạng các mạng xã hội gắn kèm
     social_lines = []
     social_links = data.get("social_links", [])
     if social_links:
@@ -608,15 +597,32 @@ async def fetch_tiktok_user_info(username: str) -> dict:
         return {"error": str(e)}
 
 
-# ================= GIAO DIỆN PANEL TIKTOK =================
+# ================= GIẢI MÃ NGÀY TẠO TIKTOK TỪ SNOWFLAKE UID =================
+def get_tiktok_creation_time(uid: str) -> str:
+    """Giải mã timestamp ngày tạo tài khoản từ 64-bit Snowflake ID của TikTok."""
+    try:
+        val = int(uid)
+        timestamp = val >> 32  # 32-bit đầu là Unix timestamp
+        if 1400000000 <= timestamp <= 2000000000:
+            dt = datetime.fromtimestamp(timestamp)
+            return dt.strftime("%Y-%m-%d | %H:%M:%S")
+    except Exception:
+        pass
+    return "Không xác định"
+
+
+# ================= GIAO DIỆN PANEL TIKTOK THEO YÊU CẦU =================
 def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
+    clean_user = html.escape(username.lstrip("@"))
+
     if not data or data.get("error"):
         err = data.get("error", "Người dùng không tồn tại hoặc API bận.")
         return (
-            f"╔════════ ❌ <b>TRA CỨU THẤT BẠI</b> ════════╗\n"
-            f"║ 🎯 <b>Mục tiêu:</b> <code>@{html.escape(username)}</code>\n"
-            f"║ ⚠️ <b>Chi tiết:</b> <i>{html.escape(str(err))}</i>\n"
-            f"╚════════════════════════════════════╝",
+            f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+            f"❌ <b>TRA CỨU THẤT BẠI:</b> <code>@{clean_user}</code>\n"
+            f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
+            f"⚠️ <b>Chi tiết:</b> <i>{html.escape(str(err))}</i>\n"
+            f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
             None,
         )
 
@@ -624,37 +630,62 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     s = data.get("data", {}).get("stats") or data.get("userInfo", {}).get("stats") or data.get("stats") or {}
 
     nickname = html.escape(str(u.get("nickname") or u.get("name") or "—"))
-    unique_id = html.escape(str(u.get("uniqueId") or u.get("unique_id") or username))
-    uid = str(u.get("id") or u.get("uid") or "—")
-    bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
-    region = str(u.get("region") or u.get("country") or "N/A").upper()
+    unique_id = html.escape(str(u.get("uniqueId") or u.get("unique_id") or username).lstrip("@"))
+    uid = str(u.get("id") or u.get("uid") or "0")
 
-    verified_badge = "💎 <b>Verified</b>" if u.get("verified") or u.get("customVerify") else "⚪ <b>Standard</b>"
-    private_badge = "🔒 <b>Private</b>" if u.get("privateAccount") or u.get("is_private") else "🌐 <b>Public</b>"
+    # Trạng thái tài khoản
+    is_private = u.get("privateAccount") or u.get("is_private") or False
+    status_str = "🔒 Riêng tư" if is_private else "🌐 Công khai"
 
+    # Tích xanh / Xác minh
+    is_verified = u.get("verified") or u.get("customVerify") or False
+    verified_str = "✅ Đã xác minh" if is_verified else "❌ Chưa xác minh"
+
+    # Ngôn ngữ / Vùng
+    language = html.escape(str(u.get("language") or u.get("region") or "vi").lower())
+
+    # Mô tả / Tiểu sử
+    bio_raw = str(u.get("signature") or u.get("bio") or "Không có tiểu sử.")
+    bio = html.escape(bio_raw)
+
+    # Bán hàng (TikTok Shop / Commerce)
+    has_shop = u.get("commerceUserInfo", {}).get("commerceUser") or u.get("is_star") or False
+    shop_str = "✅ Có" if has_shop else "❌ Không"
+
+    # Chỉ số thống kê
     followers = s.get("followerCount") or s.get("followers") or 0
     following = s.get("followingCount") or s.get("following") or 0
-    hearts = s.get("heartCount") or s.get("hearts") or s.get("heart") or 0
     videos = s.get("videoCount") or s.get("video") or 0
-    diggs = s.get("diggCount") or 0
+    hearts = s.get("heartCount") or s.get("hearts") or s.get("heart") or 0
+    friends = s.get("friendCount") or 0
+
+    # Tính ngày tạo từ UID
+    created_time_str = get_tiktok_creation_time(uid)
 
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
 
     panel = (
-        f"⚡ <b>HỒ SƠ TIKTOK CHI TIẾT</b> ⚡\n"
-        f"<code>────────────────────────────</code>\n"
-        f"📛 <b>Tên:</b> <b>{nickname}</b>\n"
-        f"🆔 <b>ID:</b> <code>@{unique_id}</code>\n"
-        f"🔢 <b>Mã UID:</b> <code>{uid}</code>\n"
-        f"🌍 <b>Khu vực:</b> <code>{region}</code>\n"
-        f"🛡 <b>Trạng thái:</b> {verified_badge} │ {private_badge}\n"
-        f"<code>────────────────────────────</code>\n"
-        f"👥 <b>Followers:</b> <code>{followers:,}</code>\n"
-        f"👣 <b>Following:</b> <code>{following:,}</code>\n"
-        f"❤️ <b>Tổng Tym:</b> <code>{hearts:,}</code>\n"
-        f"🎬 <b>Video:</b> <code>{videos:,}</code> │ 👍 <b>Thả tim:</b> <code>{diggs:,}</code>\n"
-        f"<code>────────────────────────────</code>\n"
-        f"💬 <b>Tiểu sử:</b> <i>« {bio} »</i>"
+        f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        f"ℹ️ Thông Tin TikTok @{unique_id} ⚡\n"
+        f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
+        f"👤 Tên: <b>{nickname}</b>\n"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"🔒 Trạng thái: {status_str}\n"
+        f"✅ Xác minh: {verified_str}\n"
+        f"🌐 Ngôn ngữ: {language}\n"
+        f"📝 Mô tả: {bio}\n"
+        f"🛒 Bán hàng: {shop_str}\n"
+        f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
+        f"📊 Thống kê:\n"
+        f"   ├ 👥 Follower:   <code>{followers:,}</code>\n"
+        f"   ├ 👤 Following:  <code>{following:,}</code>\n"
+        f"   ├ 🎥 Video:      <code>{videos:,}</code>\n"
+        f"   ├ ❤️ Lượt thích: <code>{hearts:,}</code>\n"
+        f"   └ 👫 Bạn bè:     <code>{friends:,}</code>\n"
+        f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
+        f"⏰ Ngày tạo: <code>{created_time_str}</code>\n"
+        f"🔗 Link: <a href='https://www.tiktok.com/@{unique_id}'>TikTok Profile</a>\n"
+        f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
     )
 
     return panel, avatar
@@ -809,7 +840,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/getinfo &lt;username&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/getinfo tiktok</code>\n"
-            "• Trả về: Avatar gốc HD, UID, Followers, Tim, Trạng thái kênh."
+            "• Trả về: Thẻ bảng chi tiết, trạng thái bán hàng, bạn bè và ngày tạo chính xác."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -822,7 +853,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc <code>/fb https://facebook.com/zuck</code>\n"
-            "• <b>Dữ liệu bóc tách:</b> Tên, UID, Giới tính, Người theo dõi, Năm tạo nick, Nơi sống, Học vấn, Công việc, Toàn bộ tiểu sử & Các mạng xã hội gắn kèm."
+            "• <b>Dữ liệu bóc tách:</b> Tên, UID, Giới tính, Follower, Năm tạo, Nơi sống, Học vấn, Công việc, Toàn bộ tiểu sử & Các mạng xã hội gắn kèm."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
