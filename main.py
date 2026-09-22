@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime
 import html
 import io
+import json
 import logging
 import os
 import platform
@@ -29,13 +30,13 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+import yt_dlp
 
 BOT_START_TIME = time.time()
 
 # ================= CẤU HÌNH TOKEN & API =================
-# Ưu tiên lấy từ Variables trên Railway
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98").strip()
-ALLOWED_USERS = []  # Điền user_id (int) nếu muốn giới hạn, để trống nếu public
+ALLOWED_USERS = []
 
 FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
 
@@ -53,6 +54,7 @@ IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
 IMG_DOWN = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png"
 IMG_FB = "https://cdn.phototourl.com/member/2026-09-20-9afea8db-8a1c-4ffb-9f41-68c26a82f2f5.jpg"
+IMG_SING = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 
 TIK_HEADERS = {
     "User-Agent": (
@@ -175,14 +177,11 @@ async def generate_system_status_canvas() -> io.BytesIO:
     img = Image.new("RGBA", (width, height), (22, 27, 38, 255))
     draw = ImageDraw.Draw(img)
 
-    # Nền trong mờ (Glassmorphism container)
     draw_rounded_rect(draw, (padding, padding, width - padding, height - padding), radius=22, fill=(28, 35, 49, 255))
 
-    # Header Bar
     header_h = 60
     draw_rounded_rect(draw, (padding + 10, padding + 10, width - padding - 10, padding + 10 + header_h), radius=14, fill=(35, 44, 62, 255))
 
-    # macOS Traffic Lights
     dot_radius = 8
     dot_y = padding + 10 + header_h // 2
     dots = [(padding + 35, (255, 95, 86)), (padding + 60, (255, 189, 46)), (padding + 85, (39, 201, 63))]
@@ -229,7 +228,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("Fallback LoveTik:", "STANDBY", (100, 181, 246)),
+        ("YouTube Engine:", "YT-DLP (Audio Stream)", (100, 181, 246)),
         ("Audio Parser:", "BUFFER STREAM", (100, 181, 246)),
         ("Facebook API:", "CONNECTED", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
@@ -262,11 +261,54 @@ async def generate_system_status_canvas() -> io.BytesIO:
     return buf
 
 
+# ================= YOUTUBE SEARCH & DOWNLOAD (THAY THẾ SING CODE JS) =================
+def search_youtube(keyword: str, max_results: int = 6) -> list[dict]:
+    """Tìm kiếm danh sách bài hát trên YouTube."""
+    ydl_opts = {
+        "quiet": True,
+        "extract_flat": True,
+        "default_search": f"ytsearch{max_results}",
+        "skip_download": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(keyword, download=False)
+        entries = info.get("entries", [])
+        results = []
+        for e in entries:
+            results.append({
+                "id": e.get("id"),
+                "title": e.get("title", "Không rõ"),
+                "channel": e.get("channel") or e.get("uploader", "Không rõ"),
+                "duration": e.get("duration"),
+                "url": e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
+            })
+        return results
+
+
+def download_youtube_audio_bytes(video_url: str) -> tuple[io.BytesIO | None, dict]:
+    """Tải trực tiếp âm thanh từ YouTube vào RAM (không ghi file rác)."""
+    ydl_opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "quiet": True,
+        "no_warnings": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        meta = ydl.extract_info(video_url, download=False)
+        audio_url = meta.get("url")
+        details = {
+            "title": meta.get("title", "YouTube Audio"),
+            "uploader": meta.get("uploader", "YouTube"),
+            "duration": meta.get("duration", 0),
+            "view_count": meta.get("view_count", 0),
+            "id": meta.get("id", "audio")
+        }
+        return audio_url, details
+
+
 # ================= LOGIC FACEBOOK =================
 def estimate_fb_creation_details(uid: str) -> str:
     if not uid.isdigit():
         return "Không công khai"
-
     val = int(uid)
     if val < 10000000:
         return "Năm 2004 - 2006 (Giai đoạn đầu)"
@@ -812,29 +854,31 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
 def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboardMarkup]:
     display_name = html.escape(user_name)
     panel = (
-        f"⚡ <b>TIKTOK & FACEBOOK TOOLKIT PRO</b> ⚡\n"
+        f"⚡ <b>TIKTOK & FACEBOOK & YOUTUBE TOOLKIT</b> ⚡\n"
         f"<code>────────────────────────────</code>\n"
         f"👋 Xin chào, <b>{display_name}</b>\n"
-        f"Hệ thống tự động: Tải Video HD, Tách MP3 & OSINT Profile.\n\n"
+        f"Hệ thống đa năng: Tải Media HD, Nghe nhạc YouTube & Tra cứu Profile.\n\n"
         f"📌 <b>LỆNH TRUY CẬP NHANH:</b>\n"
-        f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto Full HD No-WM)\n"
-        f"• 🎵 <b>Tách nhạc:</b> <code>/music &lt;link&gt;</code>\n"
+        f"• 🎶 <b>Nhạc YouTube:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
+        f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto Full HD)\n"
+        f"• 🎵 <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
         f"• 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
         f"• 🔵 <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"🟢 <b>Status:</b> <i>Engine Core Online (Railway Deployment)</i>"
+        f"🟢 <b>Status:</b> <i>Railway Container Engine Online</i>"
     )
 
     keyboard = [
         [
-            InlineKeyboardButton("📥 Tải Video", callback_data="panel_guide_down"),
-            InlineKeyboardButton("🎵 Tách Âm Thanh", callback_data="panel_guide_music"),
+            InlineKeyboardButton("🎶 Tìm Nhạc YouTube", callback_data="panel_guide_sing"),
+            InlineKeyboardButton("📥 Tải TikTok", callback_data="panel_guide_down"),
         ],
         [
+            InlineKeyboardButton("🎵 Tách Nhạc TikTok", callback_data="panel_guide_music"),
             InlineKeyboardButton("🔎 Info TikTok", callback_data="panel_guide_info"),
-            InlineKeyboardButton("🔵 Info Facebook", callback_data="panel_guide_fb"),
         ],
         [
+            InlineKeyboardButton("🔵 Info Facebook", callback_data="panel_guide_fb"),
             InlineKeyboardButton("📊 Server Status", callback_data="panel_status"),
         ],
     ]
@@ -888,6 +932,19 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             except Exception:
                 await query.message.reply_photo(photo=IMG_WELCOME, caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
+    elif data == "panel_guide_sing":
+        text = (
+            "🎶 <b>HƯỚNG DẪN TÌM VÀ TẢI NHẠC YOUTUBE</b>\n"
+            "<code>────────────────────────────</code>\n"
+            "• Cú pháp: <code>/sing &lt;tên bài hát hoặc từ khóa&gt;</code>\n"
+            "• <i>Ví dụ:</i> <code>/sing tắt đèn đi</code>\n"
+            "• Bot sẽ trả về danh sách, bạn chỉ cần bấm nút để tải trực tiếp file Audio chất lượng cao về máy."
+        )
+        try:
+            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+        except Exception:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+
     elif data == "panel_guide_down":
         text = (
             "📥 <b>HƯỚNG DẪN TẢI TIKTOK FULL HD</b>\n"
@@ -903,11 +960,10 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_music":
         text = (
-            "🎵 <b>TRÍCH XUẤT AUDIO GỐC</b>\n"
+            "🎵 <b>TRÍCH XUẤT AUDIO TIKTOK</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/music &lt;link_tiktok&gt;</code>\n"
-            "• Hoặc bấm nút <b>[Tải nhạc MP3]</b> bên dưới mỗi video tải về.\n"
-            "• Tự động trích xuất file MP3 chất lượng cao."
+            "• Hoặc bấm nút <b>[Tải nhạc MP3]</b> bên dưới mỗi video tải về."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -938,7 +994,6 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
-    # --- KHỐI ĐỔI SERVER STATUS SANG CANVAS ẢNH ---
     elif data == "panel_status":
         await query.answer("📊 Đang render ảnh thống kê...", show_alert=False)
         canvas_buffer = await generate_system_status_canvas()
@@ -963,6 +1018,139 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(back_btn),
             )
+
+
+# ================= XỬ LÝ LỆNH /sing (YOUTUBE MUSIC) =================
+async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+
+    if not context.args:
+        help_panel = (
+            f"╔════════ ⚠️ <b>THIẾU TÊN BÀI HÁT</b> ════════╗\n"
+            f"║ 📌 <b>Cú pháp:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
+            f"║ 💡 <i>Ví dụ: <code>/sing Tắt đèn đi</code></i>\n"
+            f"╚════════════════════════════════════╝"
+        )
+        try:
+            await update.message.reply_photo(photo=IMG_SING, caption=help_panel, parse_mode=ParseMode.HTML)
+        except Exception:
+            await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
+        return
+
+    keyword = " ".join(context.args).strip()
+    status_msg = await update.message.reply_text(f"🔍 <i>Đang tìm kiếm bài hát:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
+
+    loop = asyncio.get_running_loop()
+    try:
+        results = await loop.run_in_executor(None, search_youtube, keyword, 6)
+    except Exception as e:
+        logger.error(f"Lỗi tìm kiếm YouTube: {e}")
+        await status_msg.edit_text("❌ Không thể tìm kiếm trên YouTube lúc này. Vui lòng thử lại sau!")
+        return
+
+    if not results:
+        await status_msg.edit_text("❌ Không tìm thấy kết quả nào phù hợp với từ khóa này.")
+        return
+
+    msg_lines = [f"🎶 <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
+    keyboard = []
+    row = []
+
+    for idx, item in enumerate(results, 1):
+        vid_id = item["id"]
+        title = item["title"]
+        channel = item["channel"]
+        sec = item.get("duration") or 0
+        dur_str = f"{sec // 60}:{sec % 60:02d}" if sec else "N/A"
+
+        msg_lines.append(f"<b>{idx}.</b> {html.escape(title)}\n   👤 Kênh: <i>{html.escape(channel)}</i> | ⏱️ {dur_str}")
+        row.append(InlineKeyboardButton(f"🎵 Bài {idx}", callback_data=f"ytdl_{vid_id}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    msg_lines.append("<code>────────────────────────────</code>\n👉 <i>Bấm vào nút số tương ứng bên dưới để tải audio:</i>")
+    text_content = "\n".join(msg_lines)
+
+    await status_msg.delete()
+    try:
+        await update.message.reply_photo(
+            photo=IMG_SING,
+            caption=truncate_text(text_content, 1020),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    except Exception:
+        await update.message.reply_text(
+            truncate_text(text_content, 1020),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+
+# Nút callback tải audio YouTube khi người dùng chọn bài
+async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("⏳ Đang xử lý âm thanh...", show_alert=False)
+    data = query.data
+
+    vid_id = data.replace("ytdl_", "")
+    target_url = f"https://www.youtube.com/watch?v={vid_id}"
+
+    loading_msg = await query.message.reply_text("⏳ <i>Đang trích xuất audio stream từ YouTube...</i>", parse_mode=ParseMode.HTML)
+
+    loop = asyncio.get_running_loop()
+    try:
+        audio_stream_url, details = await loop.run_in_executor(None, download_youtube_audio_bytes, target_url)
+    except Exception as e:
+        logger.error(f"Lỗi extract YouTube: {e}")
+        await loading_msg.edit_text("❌ Không thể tải track âm thanh này (bản quyền hoặc giới hạn độ tuổi).")
+        return
+
+    if not audio_stream_url:
+        await loading_msg.edit_text("❌ Không tìm thấy định dạng âm thanh phù hợp.")
+        return
+
+    # Tải stream vào RAM buffer
+    stream_file = await download_file_stream(audio_stream_url, max_size_mb=45)
+    await loading_msg.delete()
+
+    title = html.escape(details.get("title", "YouTube Track"))
+    uploader = html.escape(details.get("uploader", "YouTube Artist"))
+
+    caption = (
+        f"╔══════════ 🎶 <b>YOUTUBE AUDIO</b> ══════════╗\n"
+        f"║ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
+        f"║ 👤 <b>Kênh/Nghệ sĩ:</b> {uploader}\n"
+        f"║ 🔗 <b>Nguồn:</b> <a href='{target_url}'>YouTube Link</a>\n"
+        f"╚════════════════════════════════════╝"
+    )
+
+    try:
+        if stream_file:
+            stream_file.name = f"{vid_id}.mp3"
+            await query.message.reply_audio(
+                audio=stream_file,
+                title=title,
+                performer=uploader,
+                caption=truncate_text(caption, 1020),
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await query.message.reply_audio(
+                audio=audio_stream_url,
+                title=title,
+                performer=uploader,
+                caption=truncate_text(caption, 1020),
+                parse_mode=ParseMode.HTML,
+            )
+    except Exception as e:
+        logger.error(f"Lỗi gửi YouTube Audio: {e}")
+        await query.message.reply_text("❌ Lỗi gửi file: File âm thanh vượt quá giới hạn Telegram cho phép.")
 
 
 # LỆNH /fb
@@ -1010,7 +1198,7 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
-# Nút callback tải nhạc dưới video
+# Nút callback tải nhạc dưới video TikTok
 async def handle_download_music_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("⏳ Đang tải audio...", show_alert=False)
@@ -1039,11 +1227,11 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
     music_author = html.escape(res.get("music_info", {}).get("author") or "Original Sound")
 
     audio_panel = (
-        f"╔══════════ 🎵 <b>AUDIO PLAYER</b> ══════════╗\n"
+        f"╔══════════ 🎵 <b>TIKTOK AUDIO PLAYER</b> ══════════╗\n"
         f"║ 🎼 <b>Bài hát:</b> <b>{music_title}</b>\n"
         f"║ 👤 <b>Nghệ sĩ:</b> {music_author}\n"
         f"║ 🆔 <b>Source ID:</b> <code>{video_id}</code>\n"
-        f"╚════════════════════════════════════╝"
+        f"╚══════════════════════════════════════════╝"
     )
 
     stream_file = await download_file_stream(music_url, max_size_mb=30)
@@ -1236,7 +1424,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             keyboard.append([InlineKeyboardButton("🎵 Tải nhạc MP3 của video", callback_data=f"dlmusic_{video_id}")])
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
-        # Trường hợp Album ảnh: gửi theo từng batch tối đa 10 ảnh
         if res.get("images"):
             await msg.delete()
             all_images = res["images"]
@@ -1295,7 +1482,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║   Features: Canvas Server Status + TikTok HD/Audio   ║\n"
+        "║ Features: YouTube Music + Canvas Server Status + TT  ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -1305,12 +1492,14 @@ def main():
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
+    app.add_handler(CommandHandler("sing", cmd_sing))
     app.add_handler(CommandHandler("getinfo", cmd_getinfo))
     app.add_handler(CommandHandler("music", cmd_music))
     app.add_handler(CommandHandler("downmusic", cmd_music))
     app.add_handler(CommandHandler("fb", cmd_fb))
 
     # Callbacks
+    app.add_handler(CallbackQueryHandler(handle_youtube_download_callback, pattern="^ytdl_"))
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
     app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
 
