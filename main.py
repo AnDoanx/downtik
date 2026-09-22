@@ -56,12 +56,11 @@ IMG_DOWN = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1
 IMG_FB = "https://cdn.phototourl.com/member/2026-09-20-9afea8db-8a1c-4ffb-9f41-68c26a82f2f5.jpg"
 IMG_SING = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 
-TIK_HEADERS = {
+COMMON_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
@@ -83,7 +82,7 @@ def is_authorized(user_id: int) -> bool:
 async def get_http_session() -> aiohttp.ClientSession:
     global HTTP_SESSION
     if HTTP_SESSION is None or HTTP_SESSION.closed:
-        HTTP_SESSION = aiohttp.ClientSession(headers=TIK_HEADERS)
+        HTTP_SESSION = aiohttp.ClientSession(headers=COMMON_HEADERS)
     return HTTP_SESSION
 
 
@@ -193,7 +192,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
             "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            "arialbd.ttf" if bold else "arial.ttf"
+            "arialbd.ttf" if bold else "arial.ttf",
         ]
         for name in font_names:
             try:
@@ -228,7 +227,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("YouTube Engine:", "YT-DLP (Audio Stream)", (100, 181, 246)),
+        ("YouTube Engine:", "Bypass IP Filter", (100, 181, 246)),
         ("Audio Parser:", "BUFFER STREAM", (100, 181, 246)),
         ("Facebook API:", "CONNECTED", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
@@ -261,36 +260,107 @@ async def generate_system_status_canvas() -> io.BytesIO:
     return buf
 
 
-# ================= YOUTUBE SEARCH & DOWNLOAD (THAY THẾ SING CODE JS) =================
-def search_youtube(keyword: str, max_results: int = 6) -> list[dict]:
-    """Tìm kiếm danh sách bài hát trên YouTube."""
-    ydl_opts = {
-        "quiet": True,
-        "extract_flat": True,
-        "default_search": f"ytsearch{max_results}",
-        "skip_download": True,
+# ================= FIX LỖI TÌM KIẾM YOUTUBE TRÊN RAILWAY =================
+async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
+    """Tìm kiếm trực tiếp từ YouTube web HTML (Không bị chặn như yt-dlp search)."""
+    session = await get_http_session()
+    encoded = urllib.parse.quote_plus(keyword)
+    url = f"https://www.youtube.com/results?search_query={encoded}"
+
+    headers = {
+        **COMMON_HEADERS,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.youtube.com/",
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(keyword, download=False)
-        entries = info.get("entries", [])
-        results = []
-        for e in entries:
-            results.append({
-                "id": e.get("id"),
-                "title": e.get("title", "Không rõ"),
-                "channel": e.get("channel") or e.get("uploader", "Không rõ"),
-                "duration": e.get("duration"),
-                "url": e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
-            })
-        return results
+
+    try:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status == 200:
+                html_data = await resp.text()
+                # Bóc tách chuỗi JSON ytInitialData
+                match = re.search(r"var ytInitialData\s*=\s*({.+?});</script>", html_data)
+                if not match:
+                    match = re.search(r"window\[\"ytInitialData\"\]\s*=\s*({.+?});", html_data)
+
+                if match:
+                    json_str = match.group(1)
+                    data = json.loads(json_str)
+
+                    contents = (
+                        data.get("contents", {})
+                        .get("twoColumnSearchResultsRenderer", {})
+                        .get("primaryContents", {})
+                        .get("sectionListRenderer", {})
+                        .get("contents", [])
+                    )
+
+                    results = []
+                    for sec in contents:
+                        item_section = sec.get("itemSectionRenderer", {}).get("contents", [])
+                        for item in item_section:
+                            video = item.get("videoRenderer")
+                            if video and "videoId" in video:
+                                vid_id = video["videoId"]
+                                title = video.get("title", {}).get("runs", [{}])[0].get("text", "Video")
+                                channel = video.get("ownerText", {}).get("runs", [{}])[0].get("text", "YouTube")
+                                dur_text = video.get("lengthText", {}).get("simpleText", "N/A")
+
+                                results.append({
+                                    "id": vid_id,
+                                    "title": title,
+                                    "channel": channel,
+                                    "duration_text": dur_text,
+                                    "url": f"https://www.youtube.com/watch?v={vid_id}"
+                                })
+
+                                if len(results) >= max_results:
+                                    return results
+                    if results:
+                        return results
+    except Exception as e:
+        logger.warning(f"Fast HTML search fail: {e}")
+
+    # Fallback 2: Chạy yt-dlp với client android để bypass bot check
+    def _fallback_ytdlp():
+        ydl_opts = {
+            "quiet": True,
+            "extract_flat": True,
+            "default_search": f"ytsearch{max_results}",
+            "skip_download": True,
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(keyword, download=False)
+            items = []
+            for e in info.get("entries", []) or []:
+                if not e:
+                    continue
+                sec = e.get("duration") or 0
+                dur_text = f"{sec // 60}:{sec % 60:02d}" if sec else "N/A"
+                items.append({
+                    "id": e.get("id"),
+                    "title": e.get("title", "Không rõ"),
+                    "channel": e.get("channel") or e.get("uploader", "Không rõ"),
+                    "duration_text": dur_text,
+                    "url": f"https://www.youtube.com/watch?v={e.get('id')}"
+                })
+            return items
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _fallback_ytdlp)
+    except Exception as e:
+        logger.error(f"Fallback yt-dlp search error: {e}")
+        return []
 
 
 def download_youtube_audio_bytes(video_url: str) -> tuple[io.BytesIO | None, dict]:
-    """Tải trực tiếp âm thanh từ YouTube vào RAM (không ghi file rác)."""
+    """Tải và trích xuất audio stream từ YouTube bằng yt-dlp với format tối ưu."""
     ydl_opts = {
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "quiet": True,
         "no_warnings": True,
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         meta = ydl.extract_info(video_url, download=False)
@@ -299,7 +369,6 @@ def download_youtube_audio_bytes(video_url: str) -> tuple[io.BytesIO | None, dic
             "title": meta.get("title", "YouTube Audio"),
             "uploader": meta.get("uploader", "YouTube"),
             "duration": meta.get("duration", 0),
-            "view_count": meta.get("view_count", 0),
             "id": meta.get("id", "audio")
         }
         return audio_url, details
@@ -688,7 +757,7 @@ async def tikwm_req(params: dict):
     session = await get_http_session()
     url = TIKWM_BASE
     post_headers = {
-        **TIK_HEADERS,
+        **COMMON_HEADERS,
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
     }
@@ -702,7 +771,7 @@ async def tikwm_req(params: dict):
         logger.warning(f"TikWM POST fail: {e}")
 
     try:
-        async with session.get(url, params=params, headers=TIK_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(url, params=params, headers=COMMON_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
                 data = await resp.json(content_type=None)
                 if data and data.get("code") == 0:
@@ -717,7 +786,7 @@ async def fallback_tik_download(tiktok_url: str):
     api_url = "https://lovetik.com/api/ajax/search"
     payload = {"query": tiktok_url}
     headers = {
-        **TIK_HEADERS,
+        **COMMON_HEADERS,
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "Referer": "https://lovetik.com/",
     }
@@ -938,7 +1007,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/sing &lt;tên bài hát hoặc từ khóa&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/sing tắt đèn đi</code>\n"
-            "• Bot sẽ trả về danh sách, bạn chỉ cần bấm nút để tải trực tiếp file Audio chất lượng cao về máy."
+            "• Bot sẽ trả về danh sách, bấm số bài hát để nhận file Audio."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1020,7 +1089,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             )
 
 
-# ================= XỬ LÝ LỆNH /sing (YOUTUBE MUSIC) =================
+# ================= XỬ LÝ LỆNH /sing =================
 async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -1041,16 +1110,10 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyword = " ".join(context.args).strip()
     status_msg = await update.message.reply_text(f"🔍 <i>Đang tìm kiếm bài hát:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
 
-    loop = asyncio.get_running_loop()
-    try:
-        results = await loop.run_in_executor(None, search_youtube, keyword, 6)
-    except Exception as e:
-        logger.error(f"Lỗi tìm kiếm YouTube: {e}")
-        await status_msg.edit_text("❌ Không thể tìm kiếm trên YouTube lúc này. Vui lòng thử lại sau!")
-        return
+    results = await search_youtube_fast(keyword, 6)
 
     if not results:
-        await status_msg.edit_text("❌ Không tìm thấy kết quả nào phù hợp với từ khóa này.")
+        await status_msg.edit_text("❌ Không tìm thấy kết quả nào phù hợp với từ khóa này. Hãy thử từ khóa khác cụ thể hơn!")
         return
 
     msg_lines = [f"🎶 <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
@@ -1061,8 +1124,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vid_id = item["id"]
         title = item["title"]
         channel = item["channel"]
-        sec = item.get("duration") or 0
-        dur_str = f"{sec // 60}:{sec % 60:02d}" if sec else "N/A"
+        dur_str = item.get("duration_text", "N/A")
 
         msg_lines.append(f"<b>{idx}.</b> {html.escape(title)}\n   👤 Kênh: <i>{html.escape(channel)}</i> | ⏱️ {dur_str}")
         row.append(InlineKeyboardButton(f"🎵 Bài {idx}", callback_data=f"ytdl_{vid_id}"))
@@ -1095,27 +1157,26 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Nút callback tải audio YouTube khi người dùng chọn bài
 async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("⏳ Đang xử lý âm thanh...", show_alert=False)
+    await query.answer("⏳ Đang chuẩn bị audio...", show_alert=False)
     data = query.data
 
     vid_id = data.replace("ytdl_", "")
     target_url = f"https://www.youtube.com/watch?v={vid_id}"
 
-    loading_msg = await query.message.reply_text("⏳ <i>Đang trích xuất audio stream từ YouTube...</i>", parse_mode=ParseMode.HTML)
+    loading_msg = await query.message.reply_text("⏳ <i>Đang tải audio từ YouTube vào hệ thống...</i>", parse_mode=ParseMode.HTML)
 
     loop = asyncio.get_running_loop()
     try:
         audio_stream_url, details = await loop.run_in_executor(None, download_youtube_audio_bytes, target_url)
     except Exception as e:
         logger.error(f"Lỗi extract YouTube: {e}")
-        await loading_msg.edit_text("❌ Không thể tải track âm thanh này (bản quyền hoặc giới hạn độ tuổi).")
+        await loading_msg.edit_text("❌ Không thể trích xuất audio bài này (giới hạn bản quyền hoặc độ tuổi).")
         return
 
     if not audio_stream_url:
-        await loading_msg.edit_text("❌ Không tìm thấy định dạng âm thanh phù hợp.")
+        await loading_msg.edit_text("❌ Không tìm thấy stream âm thanh khả dụng.")
         return
 
-    # Tải stream vào RAM buffer
     stream_file = await download_file_stream(audio_stream_url, max_size_mb=45)
     await loading_msg.delete()
 
