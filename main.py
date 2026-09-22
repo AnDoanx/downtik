@@ -11,6 +11,7 @@ import os
 import platform
 import re
 import sys
+import tempfile
 import time
 import urllib.parse
 import aiohttp
@@ -109,7 +110,7 @@ def ensure_full_url(url: str) -> str:
     return url
 
 
-# ================= HỖ TRỢ TẢI STREAM VÀO BUFFER RAM =================
+# ================= HỖ TRỢ STREAM BUFFER =================
 async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
     session = await get_http_session()
     try:
@@ -137,7 +138,7 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
     return None
 
 
-# ================= VẼ BẢNG ĐIỀU KHIỂN HỆ THỐNG (CANVAS DASHBOARD) =================
+# ================= VẼ CANVAS DASHBOARD =================
 def draw_rounded_rect(draw, coords, radius, fill):
     x1, y1, x2, y2 = coords
     draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill)
@@ -227,7 +228,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("YouTube Engine:", "Bypass IP Filter", (100, 181, 246)),
+        ("YouTube Core:", "Bypass n-sig Active", (100, 181, 246)),
         ("Audio Parser:", "BUFFER STREAM", (100, 181, 246)),
         ("Facebook API:", "CONNECTED", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
@@ -260,9 +261,8 @@ async def generate_system_status_canvas() -> io.BytesIO:
     return buf
 
 
-# ================= FIX LỖI TÌM KIẾM YOUTUBE TRÊN RAILWAY =================
+# ================= FIX LỖI TÌM KIẾM YOUTUBE =================
 async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
-    """Tìm kiếm trực tiếp từ YouTube web HTML (Không bị chặn như yt-dlp search)."""
     session = await get_http_session()
     encoded = urllib.parse.quote_plus(keyword)
     url = f"https://www.youtube.com/results?search_query={encoded}"
@@ -277,7 +277,6 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 200:
                 html_data = await resp.text()
-                # Bóc tách chuỗi JSON ytInitialData
                 match = re.search(r"var ytInitialData\s*=\s*({.+?});</script>", html_data)
                 if not match:
                     match = re.search(r"window\[\"ytInitialData\"\]\s*=\s*({.+?});", html_data)
@@ -320,14 +319,14 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
     except Exception as e:
         logger.warning(f"Fast HTML search fail: {e}")
 
-    # Fallback 2: Chạy yt-dlp với client android để bypass bot check
+    # Fallback search
     def _fallback_ytdlp():
         ydl_opts = {
             "quiet": True,
             "extract_flat": True,
             "default_search": f"ytsearch{max_results}",
             "skip_download": True,
-            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "android"]}},
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(keyword, download=False)
@@ -354,24 +353,114 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-def download_youtube_audio_bytes(video_url: str) -> tuple[io.BytesIO | None, dict]:
-    """Tải và trích xuất audio stream từ YouTube bằng yt-dlp với format tối ưu."""
+# ================= FIX LỖI TRÍCH XUẤT AUDIO BẢN QUYỀN / BOT CHECK =================
+def extract_youtube_audio(video_id: str) -> tuple[io.BytesIO | None, dict]:
+    """
+    Tải trực tiếp stream qua yt-dlp với iOS/mweb client để bypass n-sig và khóa IP datacenter.
+    Sử dụng file tạm tự hủy và đọc ngược lại RAM Buffer.
+    """
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    tmp_dir = tempfile.gettempdir()
+    output_template = os.path.join(tmp_dir, f"ytdl_{video_id}_%(id)s.%(ext)s")
+
     ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+        "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
-        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        meta = ydl.extract_info(video_url, download=False)
-        audio_url = meta.get("url")
-        details = {
-            "title": meta.get("title", "YouTube Audio"),
-            "uploader": meta.get("uploader", "YouTube"),
-            "duration": meta.get("duration", 0),
-            "id": meta.get("id", "audio")
+        "nocheckcertificate": True,
+        "ignoreerrors": False,
+        "max_filesize": 45 * 1024 * 1024,
+        # iOS và Mweb là 2 client bypass rate-limit n-sig hiệu quả nhất trên datacenter
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["ios", "mweb"],
+                "player_skip": ["configs", "webpage"]
+            }
+        },
+        "http_headers": {
+            "User-Agent": "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; vi_VN)",
+            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
         }
-        return audio_url, details
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            meta = ydl.extract_info(video_url, download=True)
+            if not meta:
+                return None, {}
+
+            details = {
+                "title": meta.get("title", "YouTube Track"),
+                "uploader": meta.get("uploader", "YouTube Artist"),
+                "duration": meta.get("duration", 0),
+                "id": video_id
+            }
+
+            # Tìm file vừa tải
+            downloaded_file = None
+            for fname in os.listdir(tmp_dir):
+                if fname.startswith(f"ytdl_{video_id}"):
+                    downloaded_file = os.path.join(tmp_dir, fname)
+                    break
+
+            if downloaded_file and os.path.exists(downloaded_file):
+                buf = io.BytesIO()
+                with open(downloaded_file, "rb") as f:
+                    buf.write(f.read())
+                buf.seek(0)
+                buf.name = f"{video_id}.m4a"
+
+                # Dọn file tạm
+                try:
+                    os.remove(downloaded_file)
+                except Exception:
+                    pass
+
+                return buf, details
+
+    except Exception as e:
+        logger.warning(f"Native yt-dlp extract fail: {e}")
+
+    return None, {}
+
+
+async def extract_youtube_audio_fallback_api(video_id: str) -> tuple[io.BytesIO | None, dict]:
+    """Dự phòng qua API nếu IP Railway bị YouTube chặn cứng IP."""
+    session = await get_http_session()
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+    # Cổng Cobalt API v10 public
+    endpoints = [
+        "https://api.cobalt.tools/api/json",
+        "https://co.wuk.sh/api/json"
+    ]
+    payload = {
+        "url": video_url,
+        "isAudioOnly": True,
+        "aFormat": "mp3"
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": COMMON_HEADERS["User-Agent"]
+    }
+
+    for ep in endpoints:
+        try:
+            async with session.post(ep, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status == 200:
+                    res = await resp.json(content_type=None)
+                    download_url = res.get("url")
+                    if download_url:
+                        stream_buf = await download_file_stream(download_url, max_size_mb=45)
+                        if stream_buf:
+                            stream_buf.name = f"{video_id}.mp3"
+                            return stream_buf, {"title": "YouTube Track", "uploader": "YouTube Music"}
+        except Exception:
+            continue
+
+    return None, {}
 
 
 # ================= LOGIC FACEBOOK =================
@@ -492,10 +581,7 @@ async def get_fb_id(input_str: str) -> str | None:
 async def scrape_fb_full_details(uid: str) -> dict:
     session = await get_http_session()
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": COMMON_HEADERS["User-Agent"],
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
     }
     if FB_COOKIE:
@@ -1108,12 +1194,12 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyword = " ".join(context.args).strip()
-    status_msg = await update.message.reply_text(f"🔍 <i>Đang tìm kiếm bài hát:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
+    status_msg = await update.message.reply_text(f"🔍 <i>Đang tìm kiếm:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
 
     results = await search_youtube_fast(keyword, 6)
 
     if not results:
-        await status_msg.edit_text("❌ Không tìm thấy kết quả nào phù hợp với từ khóa này. Hãy thử từ khóa khác cụ thể hơn!")
+        await status_msg.edit_text("❌ Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!")
         return
 
     msg_lines = [f"🎶 <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
@@ -1135,7 +1221,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if row:
         keyboard.append(row)
 
-    msg_lines.append("<code>────────────────────────────</code>\n👉 <i>Bấm vào nút số tương ứng bên dưới để tải audio:</i>")
+    msg_lines.append("<code>────────────────────────────</code>\n👉 <i>Bấm số bài hát để tải âm thanh:</i>")
     text_content = "\n".join(msg_lines)
 
     await status_msg.delete()
@@ -1154,31 +1240,31 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# Nút callback tải audio YouTube khi người dùng chọn bài
+# ================= CALLBACK TẢI AUDIO YOUTUBE (ĐÃ FIX TOÀN DIỆN) =================
 async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("⏳ Đang chuẩn bị audio...", show_alert=False)
+    await query.answer("⏳ Đang giải mã audio...", show_alert=False)
     data = query.data
 
     vid_id = data.replace("ytdl_", "")
     target_url = f"https://www.youtube.com/watch?v={vid_id}"
 
-    loading_msg = await query.message.reply_text("⏳ <i>Đang tải audio từ YouTube vào hệ thống...</i>", parse_mode=ParseMode.HTML)
+    loading_msg = await query.message.reply_text("⏳ <i>Đang bóc tách & tải audio bypass bản quyền...</i>", parse_mode=ParseMode.HTML)
 
     loop = asyncio.get_running_loop()
-    try:
-        audio_stream_url, details = await loop.run_in_executor(None, download_youtube_audio_bytes, target_url)
-    except Exception as e:
-        logger.error(f"Lỗi extract YouTube: {e}")
-        await loading_msg.edit_text("❌ Không thể trích xuất audio bài này (giới hạn bản quyền hoặc độ tuổi).")
-        return
+    # 1. Thử qua Native yt-dlp với iOS/mweb player client
+    stream_file, details = await loop.run_in_executor(None, extract_youtube_audio, vid_id)
 
-    if not audio_stream_url:
-        await loading_msg.edit_text("❌ Không tìm thấy stream âm thanh khả dụng.")
-        return
+    # 2. Nếu thất bại (Datacenter IP bị YouTube chặn hoàn toàn), tự động kích hoạt Fallback API
+    if not stream_file:
+        logger.info("Native fail -> Kích hoạt Fallback Audio Gateway...")
+        stream_file, details = await extract_youtube_audio_fallback_api(vid_id)
 
-    stream_file = await download_file_stream(audio_stream_url, max_size_mb=45)
     await loading_msg.delete()
+
+    if not stream_file:
+        await query.message.reply_text("❌ Không thể tải bài hát này do bản quyền cao cấp hoặc giới hạn vùng từ YouTube.")
+        return
 
     title = html.escape(details.get("title", "YouTube Track"))
     uploader = html.escape(details.get("uploader", "YouTube Artist"))
@@ -1192,23 +1278,13 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
     )
 
     try:
-        if stream_file:
-            stream_file.name = f"{vid_id}.mp3"
-            await query.message.reply_audio(
-                audio=stream_file,
-                title=title,
-                performer=uploader,
-                caption=truncate_text(caption, 1020),
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await query.message.reply_audio(
-                audio=audio_stream_url,
-                title=title,
-                performer=uploader,
-                caption=truncate_text(caption, 1020),
-                parse_mode=ParseMode.HTML,
-            )
+        await query.message.reply_audio(
+            audio=stream_file,
+            title=title,
+            performer=uploader,
+            caption=truncate_text(caption, 1020),
+            parse_mode=ParseMode.HTML,
+        )
     except Exception as e:
         logger.error(f"Lỗi gửi YouTube Audio: {e}")
         await query.message.reply_text("❌ Lỗi gửi file: File âm thanh vượt quá giới hạn Telegram cho phép.")
