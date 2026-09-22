@@ -3,6 +3,7 @@
 
 import asyncio
 from datetime import datetime
+import base64
 import html
 import io
 import json
@@ -40,6 +41,25 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv
 ALLOWED_USERS = []
 
 FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
+
+# Hỗ trợ truyền cookies.txt qua biến môi trường để vượt 100% bản quyền YouTube
+YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
+COOKIE_FILE_PATH = None
+
+if YT_COOKIES_ENV:
+    try:
+        cookie_tmp = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+        try:
+            decoded = base64.b64decode(YT_COOKIES_ENV).decode("utf-8")
+            with open(cookie_tmp, "w", encoding="utf-8") as f:
+                f.write(decoded)
+        except Exception:
+            with open(cookie_tmp, "w", encoding="utf-8") as f:
+                f.write(YT_COOKIES_ENV)
+        COOKIE_FILE_PATH = cookie_tmp
+        logging.info("Đã nạp thành công YouTube cookies từ biến môi trường.")
+    except Exception as e:
+        logging.warning(f"Không thể tạo file cookie: {e}")
 
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
@@ -138,7 +158,7 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
     return None
 
 
-# ================= VẼ CANVAS DASHBOARD =================
+# ================= VẼ CANVAS DASHBOARD (STATUS ẢNH) =================
 def draw_rounded_rect(draw, coords, radius, fill):
     x1, y1, x2, y2 = coords
     draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill)
@@ -228,9 +248,9 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("YouTube Core:", "Bypass n-sig Active", (100, 181, 246)),
+        ("YouTube Core:", "Android/TV Client", (100, 181, 246)),
         ("Audio Parser:", "BUFFER STREAM", (100, 181, 246)),
-        ("Facebook API:", "CONNECTED", (100, 181, 246)),
+        ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
     ]
 
@@ -261,7 +281,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     return buf
 
 
-# ================= FIX LỖI TÌM KIẾM YOUTUBE =================
+# ================= TÌM KIẾM YOUTUBE =================
 async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
     session = await get_http_session()
     encoded = urllib.parse.quote_plus(keyword)
@@ -319,15 +339,17 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
     except Exception as e:
         logger.warning(f"Fast HTML search fail: {e}")
 
-    # Fallback search
     def _fallback_ytdlp():
         ydl_opts = {
             "quiet": True,
             "extract_flat": True,
             "default_search": f"ytsearch{max_results}",
             "skip_download": True,
-            "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "android"]}},
+            "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
         }
+        if COOKIE_FILE_PATH:
+            ydl_opts["cookiefile"] = COOKIE_FILE_PATH
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(keyword, download=False)
             items = []
@@ -353,112 +375,118 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-# ================= FIX LỖI TRÍCH XUẤT AUDIO BẢN QUYỀN / BOT CHECK =================
-def extract_youtube_audio(video_id: str) -> tuple[io.BytesIO | None, dict]:
-    """
-    Tải trực tiếp stream qua yt-dlp với iOS/mweb client để bypass n-sig và khóa IP datacenter.
-    Sử dụng file tạm tự hủy và đọc ngược lại RAM Buffer.
-    """
+# ================= TẢI AUDIO BYPASS BẢN QUYỀN & SOUNDCLOUD FALLBACK =================
+def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[io.BytesIO | None, dict]:
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     tmp_dir = tempfile.gettempdir()
     output_template = os.path.join(tmp_dir, f"ytdl_{video_id}_%(id)s.%(ext)s")
 
-    ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
-        "outtmpl": output_template,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
-        "ignoreerrors": False,
-        "max_filesize": 45 * 1024 * 1024,
-        # iOS và Mweb là 2 client bypass rate-limit n-sig hiệu quả nhất trên datacenter
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["ios", "mweb"],
-                "player_skip": ["configs", "webpage"]
-            }
-        },
-        "http_headers": {
-            "User-Agent": "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; vi_VN)",
-            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-        }
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            meta = ydl.extract_info(video_url, download=True)
-            if not meta:
-                return None, {}
-
-            details = {
-                "title": meta.get("title", "YouTube Track"),
-                "uploader": meta.get("uploader", "YouTube Artist"),
-                "duration": meta.get("duration", 0),
-                "id": video_id
-            }
-
-            # Tìm file vừa tải
-            downloaded_file = None
-            for fname in os.listdir(tmp_dir):
-                if fname.startswith(f"ytdl_{video_id}"):
-                    downloaded_file = os.path.join(tmp_dir, fname)
-                    break
-
-            if downloaded_file and os.path.exists(downloaded_file):
-                buf = io.BytesIO()
-                with open(downloaded_file, "rb") as f:
-                    buf.write(f.read())
-                buf.seek(0)
-                buf.name = f"{video_id}.m4a"
-
-                # Dọn file tạm
-                try:
-                    os.remove(downloaded_file)
-                except Exception:
-                    pass
-
-                return buf, details
-
-    except Exception as e:
-        logger.warning(f"Native yt-dlp extract fail: {e}")
-
-    return None, {}
-
-
-async def extract_youtube_audio_fallback_api(video_id: str) -> tuple[io.BytesIO | None, dict]:
-    """Dự phòng qua API nếu IP Railway bị YouTube chặn cứng IP."""
-    session = await get_http_session()
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-
-    # Cổng Cobalt API v10 public
-    endpoints = [
-        "https://api.cobalt.tools/api/json",
-        "https://co.wuk.sh/api/json"
+    client_strategies = [
+        ["android", "ios"],
+        ["tv", "mweb"],
     ]
-    payload = {
-        "url": video_url,
-        "isAudioOnly": True,
-        "aFormat": "mp3"
-    }
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": COMMON_HEADERS["User-Agent"]
-    }
 
-    for ep in endpoints:
+    for clients in client_strategies:
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "nocheckcertificate": True,
+            "max_filesize": 48 * 1024 * 1024,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": clients,
+                    "skip": ["dash", "hls"],
+                    "player_skip": ["configs", "webpage"]
+                }
+            },
+            "http_headers": {
+                "User-Agent": "com.google.android.youtube/19.29.35 (Linux; U; Android 14) gzip"
+            }
+        }
+        if COOKIE_FILE_PATH:
+            ydl_opts["cookiefile"] = COOKIE_FILE_PATH
+
         try:
-            async with session.post(ep, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                if resp.status == 200:
-                    res = await resp.json(content_type=None)
-                    download_url = res.get("url")
-                    if download_url:
-                        stream_buf = await download_file_stream(download_url, max_size_mb=45)
-                        if stream_buf:
-                            stream_buf.name = f"{video_id}.mp3"
-                            return stream_buf, {"title": "YouTube Track", "uploader": "YouTube Music"}
-        except Exception:
-            continue
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                meta = ydl.extract_info(video_url, download=True)
+                if not meta:
+                    continue
+
+                details = {
+                    "title": meta.get("title", "YouTube Track"),
+                    "uploader": meta.get("uploader", "YouTube Artist"),
+                    "duration": meta.get("duration", 0),
+                    "id": video_id
+                }
+
+                downloaded_file = None
+                for fname in os.listdir(tmp_dir):
+                    if fname.startswith(f"ytdl_{video_id}"):
+                        downloaded_file = os.path.join(tmp_dir, fname)
+                        break
+
+                if downloaded_file and os.path.exists(downloaded_file):
+                    buf = io.BytesIO()
+                    with open(downloaded_file, "rb") as f:
+                        buf.write(f.read())
+                    buf.seek(0)
+                    ext = downloaded_file.split(".")[-1]
+                    buf.name = f"{video_id}.{ext}"
+
+                    try:
+                        os.remove(downloaded_file)
+                    except Exception:
+                        pass
+
+                    return buf, details
+        except Exception as err:
+            logger.warning(f"Lỗi tải với clients {clients}: {err}")
+
+    # Fallback sang SoundCloud nếu bài hát bị YouTube khóa DRM cứng trên Datacenter
+    if search_query:
+        logger.info(f"Kích hoạt SoundCloud fallback: {search_query}")
+        sc_template = os.path.join(tmp_dir, f"sc_{video_id}_%(id)s.%(ext)s")
+        sc_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": sc_template,
+            "quiet": True,
+            "default_search": "scsearch1",
+            "max_filesize": 48 * 1024 * 1024,
+        }
+        try:
+            with yt_dlp.YoutubeDL(sc_opts) as ydl:
+                sc_meta = ydl.extract_info(search_query, download=True)
+                entries = sc_meta.get("entries", [])
+                meta = entries[0] if entries else sc_meta
+
+                details = {
+                    "title": meta.get("title", "SoundCloud Audio"),
+                    "uploader": meta.get("uploader", "SoundCloud Artist"),
+                    "duration": meta.get("duration", 0),
+                    "id": video_id
+                }
+
+                downloaded_file = None
+                for fname in os.listdir(tmp_dir):
+                    if fname.startswith(f"sc_{video_id}"):
+                        downloaded_file = os.path.join(tmp_dir, fname)
+                        break
+
+                if downloaded_file and os.path.exists(downloaded_file):
+                    buf = io.BytesIO()
+                    with open(downloaded_file, "rb") as f:
+                        buf.write(f.read())
+                    buf.seek(0)
+                    buf.name = f"{video_id}.mp3"
+                    try:
+                        os.remove(downloaded_file)
+                    except Exception:
+                        pass
+                    return buf, details
+        except Exception as sc_err:
+            logger.error(f"SoundCloud fallback thất bại: {sc_err}")
 
     return None, {}
 
@@ -1202,6 +1230,9 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!")
         return
 
+    # Lưu từ khóa vào context để fallback sang SoundCloud nếu cần
+    context.bot_data[f"kw_{update.effective_chat.id}"] = keyword
+
     msg_lines = [f"🎶 <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
     keyboard = []
     row = []
@@ -1240,40 +1271,36 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ================= CALLBACK TẢI AUDIO YOUTUBE (ĐÃ FIX TOÀN DIỆN) =================
+# ================= CALLBACK TẢI AUDIO YOUTUBE =================
 async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("⏳ Đang giải mã audio...", show_alert=False)
+    await query.answer("⏳ Đang tải audio...", show_alert=False)
     data = query.data
 
     vid_id = data.replace("ytdl_", "")
     target_url = f"https://www.youtube.com/watch?v={vid_id}"
 
-    loading_msg = await query.message.reply_text("⏳ <i>Đang bóc tách & tải audio bypass bản quyền...</i>", parse_mode=ParseMode.HTML)
+    saved_kw = context.bot_data.get(f"kw_{query.message.chat_id}", "")
+
+    loading_msg = await query.message.reply_text("⏳ <i>Đang bóc tách audio và mở khóa bản quyền...</i>", parse_mode=ParseMode.HTML)
 
     loop = asyncio.get_running_loop()
-    # 1. Thử qua Native yt-dlp với iOS/mweb player client
-    stream_file, details = await loop.run_in_executor(None, extract_youtube_audio, vid_id)
-
-    # 2. Nếu thất bại (Datacenter IP bị YouTube chặn hoàn toàn), tự động kích hoạt Fallback API
-    if not stream_file:
-        logger.info("Native fail -> Kích hoạt Fallback Audio Gateway...")
-        stream_file, details = await extract_youtube_audio_fallback_api(vid_id)
+    stream_file, details = await loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw)
 
     await loading_msg.delete()
 
     if not stream_file:
-        await query.message.reply_text("❌ Không thể tải bài hát này do bản quyền cao cấp hoặc giới hạn vùng từ YouTube.")
+        await query.message.reply_text("❌ Không thể tải được bài hát này. Hãy thử chọn bài số khác trong danh sách!")
         return
 
     title = html.escape(details.get("title", "YouTube Track"))
     uploader = html.escape(details.get("uploader", "YouTube Artist"))
 
     caption = (
-        f"╔══════════ 🎶 <b>YOUTUBE AUDIO</b> ══════════╗\n"
+        f"╔══════════ 🎶 <b>AUDIO TRACK</b> ══════════╗\n"
         f"║ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
-        f"║ 👤 <b>Kênh/Nghệ sĩ:</b> {uploader}\n"
-        f"║ 🔗 <b>Nguồn:</b> <a href='{target_url}'>YouTube Link</a>\n"
+        f"║ 👤 <b>Nghệ sĩ/Kênh:</b> {uploader}\n"
+        f"║ 🔗 <b>Nguồn gốc:</b> <a href='{target_url}'>Media Source</a>\n"
         f"╚════════════════════════════════════╝"
     )
 
@@ -1286,8 +1313,8 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
             parse_mode=ParseMode.HTML,
         )
     except Exception as e:
-        logger.error(f"Lỗi gửi YouTube Audio: {e}")
-        await query.message.reply_text("❌ Lỗi gửi file: File âm thanh vượt quá giới hạn Telegram cho phép.")
+        logger.error(f"Lỗi gửi audio: {e}")
+        await query.message.reply_text("❌ Kích thước tệp âm thanh vượt quá giới hạn truyền tải của bot.")
 
 
 # LỆNH /fb
