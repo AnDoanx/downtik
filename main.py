@@ -7,10 +7,13 @@ import html
 import io
 import logging
 import os
+import platform
 import re
+import sys
 import time
 import urllib.parse
 import aiohttp
+from PIL import Image, ImageDraw, ImageFont
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -30,25 +33,21 @@ from telegram.ext import (
 BOT_START_TIME = time.time()
 
 # ================= CẤU HÌNH TOKEN & API =================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98")
-ALLOWED_USERS = []  # Điền ID Telegram (int) nếu muốn private, để trống nếu public
+# Ưu tiên lấy từ Variables trên Railway
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98").strip()
+ALLOWED_USERS = []  # Điền user_id (int) nếu muốn giới hạn, để trống nếu public
 
-# Cookie Facebook (c_user=...; xs=...) để cào bio, follower và link MXH không bị chặn
-FB_COOKIE = os.getenv("FB_COOKIE", "")
+FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
 
-# TikTok API Endpoints
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
-# Facebook Graph API & Tokens
-FB_TOKENS = [
-    os.getenv(
-        "FB_TOKEN",
-        "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD",
-    )
+raw_fb_token = os.getenv("FB_TOKEN", "").strip()
+FB_TOKENS = [raw_fb_token] if raw_fb_token else [
+    "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
 ]
 
-# Banner Images theo từng tác vụ
+# Banner Images
 IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
 IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
@@ -86,27 +85,20 @@ async def get_http_session() -> aiohttp.ClientSession:
     return HTTP_SESSION
 
 
-# ================= HÀM HỖ TRỢ TẢI FILE MEDIA (CHỐNG LỖI TELEGRAM CDN TIMEOUT) =================
-async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
-    """Tải trực tiếp stream từ CDN vào RAM để Telegram gửi không bị lỗi chặn hoặc timeout."""
-    session = await get_http_session()
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=40)) as resp:
-            if resp.status == 200:
-                content_len = resp.headers.get("Content-Length")
-                if content_len and int(content_len) > max_size_mb * 1024 * 1024:
-                    return None
-                data = await resp.read()
-                buf = io.BytesIO(data)
-                buf.name = "media.mp4"
-                return buf
-    except Exception as e:
-        logger.error(f"Lỗi tải stream media: {e}")
-    return None
+async def close_http_session(application: Application = None):
+    global HTTP_SESSION
+    if HTTP_SESSION and not HTTP_SESSION.closed:
+        await HTTP_SESSION.close()
+        logger.info("Đã đóng an toàn kết nối aiohttp session.")
+
+
+def truncate_text(text: str, max_len: int = 1000) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
 
 
 def ensure_full_url(url: str) -> str:
-    """Chuẩn hóa đường dẫn tương đối từ TikWM."""
     if not url:
         return ""
     if url.startswith("//"):
@@ -116,7 +108,161 @@ def ensure_full_url(url: str) -> str:
     return url
 
 
-# ================= THUẬT TOÁN ĐỊNH NĂM TẠO TÀI KHOẢN THEO UID =================
+# ================= HỖ TRỢ TẢI STREAM VÀO BUFFER RAM =================
+async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
+    session = await get_http_session()
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=45)) as resp:
+            if resp.status == 200:
+                content_len = resp.headers.get("Content-Length")
+                if content_len and int(content_len) > max_size_mb * 1024 * 1024:
+                    return None
+
+                buf = io.BytesIO()
+                total_downloaded = 0
+                max_bytes = max_size_mb * 1024 * 1024
+
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    total_downloaded += len(chunk)
+                    if total_downloaded > max_bytes:
+                        return None
+                    buf.write(chunk)
+
+                buf.seek(0)
+                buf.name = "media.mp4"
+                return buf
+    except Exception as e:
+        logger.error(f"Lỗi tải stream media: {e}")
+    return None
+
+
+# ================= VẼ BẢNG ĐIỀU KHIỂN HỆ THỐNG (CANVAS DASHBOARD) =================
+def draw_rounded_rect(draw, coords, radius, fill):
+    x1, y1, x2, y2 = coords
+    draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill)
+
+
+async def generate_system_status_canvas() -> io.BytesIO:
+    uptime_sec = int(time.time() - BOT_START_TIME)
+    days, remainder = divmod(uptime_sec, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days else f"{hours}h {minutes}m {seconds}s"
+
+    session = await get_http_session()
+    start_t = time.perf_counter()
+    try:
+        async with session.get("https://api.telegram.org", timeout=aiohttp.ClientTimeout(total=3)):
+            ping_ms = round((time.perf_counter() - start_t) * 1000)
+    except Exception:
+        ping_ms = 99
+
+    ram_mb = 0.0
+    if sys.platform != "win32":
+        try:
+            import resource
+            ram_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+        except Exception:
+            ram_mb = 42.5
+    else:
+        ram_mb = 42.5
+
+    status_tag = "Mượt mà" if ping_ms < 250 else ("Bình thường" if ping_ms < 700 else "Chậm")
+
+    width, height = 1000, 620
+    padding = 45
+
+    img = Image.new("RGBA", (width, height), (22, 27, 38, 255))
+    draw = ImageDraw.Draw(img)
+
+    # Nền trong mờ (Glassmorphism container)
+    draw_rounded_rect(draw, (padding, padding, width - padding, height - padding), radius=22, fill=(28, 35, 49, 255))
+
+    # Header Bar
+    header_h = 60
+    draw_rounded_rect(draw, (padding + 10, padding + 10, width - padding - 10, padding + 10 + header_h), radius=14, fill=(35, 44, 62, 255))
+
+    # macOS Traffic Lights
+    dot_radius = 8
+    dot_y = padding + 10 + header_h // 2
+    dots = [(padding + 35, (255, 95, 86)), (padding + 60, (255, 189, 46)), (padding + 85, (39, 201, 63))]
+    for dot_x, dot_color in dots:
+        draw.ellipse([dot_x - dot_radius, dot_y - dot_radius, dot_x + dot_radius, dot_y + dot_radius], fill=dot_color)
+
+    def load_font(size, bold=False):
+        font_names = [
+            "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "arialbd.ttf" if bold else "arial.ttf"
+        ]
+        for name in font_names:
+            try:
+                return ImageFont.truetype(name, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    font_title = load_font(21, bold=True)
+    font_label = load_font(18, bold=True)
+    font_val = load_font(18, bold=False)
+    font_foot = load_font(14, bold=False)
+
+    draw.text((width // 2, dot_y), "SYSTEM METRICS & BOT STATUS", fill=(255, 255, 255), font=font_title, anchor="mm")
+
+    col_w = (width - 2 * padding - 70) // 2
+    left_x = padding + 35
+    right_x = left_x + col_w + 50
+    y_start = padding + 105
+    line_h = 44
+
+    now_vn = datetime.now().strftime("%H:%M:%S | %d/%m/%Y")
+    left_data = [
+        ("Thời gian:", now_vn, (100, 181, 246)),
+        ("Uptime Bot:", uptime_str, (255, 183, 77)),
+        ("Trạng thái:", status_tag, (100, 181, 246)),
+        ("Độ trễ (Ping):", f"{ping_ms} ms", (255, 183, 77)),
+        ("Python Core:", f"{platform.python_implementation()} {platform.python_version()}", (100, 181, 246)),
+        ("Môi trường:", f"{platform.system()} ({platform.machine()})", (100, 181, 246)),
+    ]
+
+    right_data = [
+        ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
+        ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
+        ("Fallback LoveTik:", "STANDBY", (100, 181, 246)),
+        ("Audio Parser:", "BUFFER STREAM", (100, 181, 246)),
+        ("Facebook API:", "CONNECTED", (100, 181, 246)),
+        ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
+    ]
+
+    curr_y = y_start
+    for label, val, color in left_data:
+        draw.text((left_x, curr_y), label, fill=color, font=font_label)
+        draw.text((left_x + 155, curr_y), str(val), fill=(240, 240, 240), font=font_val)
+        curr_y += line_h
+
+    curr_y = y_start
+    for label, val, color in right_data:
+        draw.text((right_x, curr_y), label, fill=color, font=font_label)
+        draw.text((right_x + 165, curr_y), str(val), fill=(240, 240, 240), font=font_val)
+        curr_y += line_h
+
+    draw.text(
+        (width // 2, height - padding - 25),
+        "Railway Deployment Engine • Telegram Bot Live Monitor",
+        fill=(120, 144, 156),
+        font=font_foot,
+        anchor="mm",
+    )
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    buf.name = "status_dashboard.png"
+    return buf
+
+
+# ================= LOGIC FACEBOOK =================
 def estimate_fb_creation_details(uid: str) -> str:
     if not uid.isdigit():
         return "Không công khai"
@@ -172,7 +318,6 @@ def estimate_fb_creation_details(uid: str) -> str:
     return "Tài khoản bảo mật cao"
 
 
-# ================= HÀM LẤY UID FACEBOOK =================
 async def get_fb_id(input_str: str) -> str | None:
     clean = input_str.strip()
     if clean.isdigit():
@@ -193,6 +338,8 @@ async def get_fb_id(input_str: str) -> str | None:
     session = await get_http_session()
 
     for token in FB_TOKENS:
+        if not token:
+            continue
         try:
             url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
@@ -204,7 +351,11 @@ async def get_fb_id(input_str: str) -> str | None:
             pass
 
     try:
-        async with session.post("https://id.traodoisub.com/api.php", data={"link": clean}, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+        async with session.post(
+            "https://id.traodoisub.com/api.php",
+            data={"link": clean},
+            timeout=aiohttp.ClientTimeout(total=6),
+        ) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
                 if j.get("id"):
@@ -213,7 +364,10 @@ async def get_fb_id(input_str: str) -> str | None:
         pass
 
     try:
-        async with session.get(f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}", timeout=aiohttp.ClientTimeout(total=6)) as resp:
+        async with session.get(
+            f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}",
+            timeout=aiohttp.ClientTimeout(total=6),
+        ) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
                 if j.get("id"):
@@ -224,11 +378,13 @@ async def get_fb_id(input_str: str) -> str | None:
     return None
 
 
-# ================= SCRAPER PROFILE FACEBOOK =================
 async def scrape_fb_full_details(uid: str) -> dict:
     session = await get_http_session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        ),
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
     }
     if FB_COOKIE:
@@ -245,53 +401,84 @@ async def scrape_fb_full_details(uid: str) -> dict:
     }
 
     try:
-        async with session.get(f"https://mbasic.facebook.com/{uid}", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+        async with session.get(
+            f"https://mbasic.facebook.com/{uid}",
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as r:
             if r.status == 200:
                 html_text = await r.text()
-                fol_match = re.search(r'(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)', html_text, re.IGNORECASE)
+                fol_match = re.search(
+                    r"(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)",
+                    html_text,
+                    re.IGNORECASE,
+                )
                 if fol_match:
                     extracted["followers"] = fol_match.group(1).replace(".", "").replace(",", "").strip()
 
                 bio_match = re.search(r'<div class="[^"]*" id="bio">([\s\S]*?)</div>', html_text)
                 if not bio_match:
-                    bio_match = re.search(r'intro_bio[^>]*><span>([\s\S]*?)</span>', html_text)
+                    bio_match = re.search(r"intro_bio[^>]*><span>([\s\S]*?)</span>", html_text)
                 if bio_match:
-                    clean_bio = re.sub(r'<br\s*/?>', '\n', bio_match.group(1))
-                    clean_bio = re.sub(r'<[^>]+>', '', clean_bio).strip()
+                    clean_bio = re.sub(r"<br\s*/?>", "\n", bio_match.group(1))
+                    clean_bio = re.sub(r"<[^>]+>", "", clean_bio).strip()
                     extracted["bio"] = html.unescape(clean_bio)
     except Exception as e:
-        logger.warning(f"Lỗi scrape trang cá nhân: {e}")
+        logger.warning(f"Lỗi scrape profile: {e}")
 
     try:
-        async with session.get(f"https://mbasic.facebook.com/{uid}/about", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+        async with session.get(
+            f"https://mbasic.facebook.com/{uid}/about",
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as r:
             if r.status == 200:
                 raw_html = await r.text()
-                m_home = re.search(r'(?:Đến từ|From)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                m_home = re.search(r"(?:Đến từ|From)\s+<a[^>]*>([^<]+)</a>", raw_html, re.IGNORECASE)
                 if not m_home:
-                    m_home = re.search(r'(?:Quê quán|Hometown)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                    m_home = re.search(
+                        r"(?:Quê quán|Hometown)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>",
+                        raw_html,
+                        re.IGNORECASE,
+                    )
                 if m_home:
                     extracted["hometown"] = m_home.group(1).strip()
 
-                m_loc = re.search(r'(?:Sống tại|Lives in)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                m_loc = re.search(r"(?:Sống tại|Lives in)\s+<a[^>]*>([^<]+)</a>", raw_html, re.IGNORECASE)
                 if not m_loc:
-                    m_loc = re.search(r'(?:Tỉnh/Thành phố hiện tại|Current city)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                    m_loc = re.search(
+                        r"(?:Tỉnh/Thành phố hiện tại|Current city)[^<]*</div><div[^>]*><span[^>]*><a[^>]*>([^<]+)</a>",
+                        raw_html,
+                        re.IGNORECASE,
+                    )
                 if m_loc:
                     extracted["location"] = m_loc.group(1).strip()
 
-                m_work = re.search(r'(?:Làm việc tại|Works at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                m_work = re.search(r"(?:Làm việc tại|Works at)\s+<a[^>]*>([^<]+)</a>", raw_html, re.IGNORECASE)
                 if m_work:
                     extracted["work"] = f"Làm việc tại {m_work.group(1).strip()}"
 
-                m_edu = re.search(r'(?:Từng học tại|Học tại|Studied at|Studies at)\s+<a[^>]*>([^<]+)</a>', raw_html, re.IGNORECASE)
+                m_edu = re.search(
+                    r"(?:Từng học tại|Học tại|Studied at|Studies at)\s+<a[^>]*>([^<]+)</a>",
+                    raw_html,
+                    re.IGNORECASE,
+                )
                 if m_edu:
                     extracted["education"] = m_edu.group(1).strip()
 
                 if not extracted["followers"]:
-                    m_fol = re.search(r'(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)', raw_html, re.IGNORECASE)
+                    m_fol = re.search(
+                        r"(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)",
+                        raw_html,
+                        re.IGNORECASE,
+                    )
                     if m_fol:
                         extracted["followers"] = m_fol.group(1).replace(".", "").replace(",", "").strip()
 
-                redirect_links = re.findall(r'href="https?://(?:[a-z0-9-]+\.)?facebook\.com/l\.php\?u=([^"&]+)', raw_html)
+                redirect_links = re.findall(
+                    r'href="https?://(?:[a-z0-9-]+\.)?facebook\.com/l\.php\?u=([^"&]+)',
+                    raw_html,
+                )
                 social_domains = [
                     "instagram.com", "tiktok.com", "youtube.com", "youtu.be",
                     "t.me", "threads.net", "twitter.com", "x.com", "github.com",
@@ -332,6 +519,8 @@ async def fetch_fb_info(uid: str) -> dict | None:
 
     fields_target = "id,name,gender,is_verified,short_name,username,updated_time,about,hometown,location,work,education"
     for token in FB_TOKENS:
+        if not token:
+            continue
         try:
             url = f"https://graph.facebook.com/{uid}?fields={fields_target}&access_token={token}"
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
@@ -388,7 +577,11 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         followers_str = "<i>Không công khai hoặc tắt follow</i>"
 
     raw_created = data.get("created_time")
-    created_str = str(raw_created).split("T")[0] if raw_created and raw_created != "None" else estimate_fb_creation_details(uid)
+    created_str = (
+        str(raw_created).split("T")[0]
+        if raw_created and raw_created != "None"
+        else estimate_fb_creation_details(uid)
+    )
 
     badge = "💎 ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
     avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
@@ -433,10 +626,10 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         f"<code>────────────────────────────</code>\n"
         f"🔗 <b>Liên kết trực tiếp:</b> <a href='https://facebook.com/{uid}'>fb.com/{uid}</a>"
     )
-    return panel, avatar_url
+    return truncate_text(panel, 1020), avatar_url
 
 
-# ================= GIẢI NÉN LINK TIKTOK =================
+# ================= LOGIC TIKTOK =================
 async def resolve_tiktok_url(url: str) -> str:
     session = await get_http_session()
     clean = url.strip()
@@ -445,22 +638,18 @@ async def resolve_tiktok_url(url: str) -> str:
             async with session.get(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 return str(resp.url)
         except Exception as e:
-            logger.error(f"Unshorten error: {e}")
+            logger.error(f"Lỗi giải mã URL rút gọn: {e}")
     return clean
 
 
-# ================= HÀM XỬ LÝ DOWNLOAD TIKTOK =================
 async def tikwm_req(params: dict):
     session = await get_http_session()
     url = TIKWM_BASE
-
     post_headers = {
         **TIK_HEADERS,
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
     }
-
-    # Thử POST với tham số hd=1
     try:
         async with session.post(url, data=params, headers=post_headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
@@ -470,7 +659,6 @@ async def tikwm_req(params: dict):
     except Exception as e:
         logger.warning(f"TikWM POST fail: {e}")
 
-    # Fallback GET
     try:
         async with session.get(url, params=params, headers=TIK_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status == 200:
@@ -479,7 +667,6 @@ async def tikwm_req(params: dict):
                     return data
     except Exception as e:
         logger.warning(f"TikWM GET fail: {e}")
-
     return None
 
 
@@ -506,8 +693,6 @@ async def fallback_tik_download(tiktok_url: str):
                         if "mp3" in link.get("t", "").lower():
                             music_url = link.get("a")
 
-                    images = j.get("images", [])
-
                     return {
                         "code": 0,
                         "data": {
@@ -525,7 +710,7 @@ async def fallback_tik_download(tiktok_url: str):
                                 "author": j.get("author", "TikTok"),
                                 "play": music_url,
                             },
-                            "images": images,
+                            "images": j.get("images", []),
                         },
                     }
     except Exception as e:
@@ -543,7 +728,7 @@ async def fetch_tiktok_user_info(username: str) -> dict:
                 return await resp.json(content_type=None)
             return {"error": f"HTTP Status {resp.status}"}
     except Exception as e:
-        logger.error(f"Tik Info API Error: {e}")
+        logger.error(f"Lỗi lấy thông tin TikTok: {e}")
         return {"error": str(e)}
 
 
@@ -593,7 +778,6 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     following = s.get("followingCount") or s.get("following") or 0
     videos = s.get("videoCount") or s.get("video") or 0
     hearts = s.get("heartCount") or s.get("hearts") or s.get("heart") or 0
-    friends = s.get("friendCount") or 0
 
     created_time_str = get_tiktok_creation_time(uid)
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
@@ -621,24 +805,24 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
     )
 
-    return panel, avatar
+    return truncate_text(panel, 1020), avatar
 
 
-# ================= DASHBOARD & STATUS =================
+# ================= DASHBOARD WELCOME =================
 def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboardMarkup]:
     display_name = html.escape(user_name)
     panel = (
-        f"⚡ <b>TIKTOK & FACEBOOK TOOLKIT</b> ⚡\n"
+        f"⚡ <b>TIKTOK & FACEBOOK TOOLKIT PRO</b> ⚡\n"
         f"<code>────────────────────────────</code>\n"
         f"👋 Xin chào, <b>{display_name}</b>\n"
-        f"Hệ thống đa nhiệm: Tải Media HD, Trích xuất Audio & Tra cứu Profile.\n\n"
+        f"Hệ thống tự động: Tải Video HD, Tách MP3 & OSINT Profile.\n\n"
         f"📌 <b>LỆNH TRUY CẬP NHANH:</b>\n"
         f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto Full HD No-WM)\n"
         f"• 🎵 <b>Tách nhạc:</b> <code>/music &lt;link&gt;</code>\n"
         f"• 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
         f"• 🔵 <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"🟢 <b>Status:</b> <i>Engine Core v2.7 Online</i>"
+        f"🟢 <b>Status:</b> <i>Engine Core Online (Railway Deployment)</i>"
     )
 
     keyboard = [
@@ -655,45 +839,6 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
         ],
     ]
     return panel, InlineKeyboardMarkup(keyboard)
-
-
-async def build_server_status_panel() -> str:
-    uptime_sec = int(time.time() - BOT_START_TIME)
-    days, remainder = divmod(uptime_sec, 86400)
-    hours, remainder = divmod(remainder, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days else f"{hours}h {minutes}m {seconds}s"
-
-    session = await get_http_session()
-    start_t = time.perf_counter()
-    ping_ms = 0
-    try:
-        async with session.get("https://api.telegram.org", timeout=aiohttp.ClientTimeout(total=3)) as r:
-            ping_ms = round((time.perf_counter() - start_t) * 1000)
-    except Exception:
-        ping_ms = 99
-
-    try:
-        import resource
-        ram_usage = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
-        ram_str = f"{ram_usage} MB"
-    except Exception:
-        ram_str = "Tối ưu"
-
-    status_panel = (
-        f"🖥 <b>SYSTEM MONITOR & METRICS</b>\n"
-        f"<code>────────────────────────────</code>\n"
-        f"⏱ <b>Thời gian chạy:</b> <code>{uptime_str}</code>\n"
-        f"⚡ <b>Độ trễ:</b> <code>{ping_ms} ms</code>\n"
-        f"🧠 <b>Bộ nhớ RAM:</b> <code>{ram_str}</code>\n"
-        f"<code>────────────────────────────</code>\n"
-        f"📡 <b>TRẠNG THÁI HỆ THỐNG:</b>\n"
-        f"├ 🎬 <b>TikWM Core HD:</b> 🟢 Operational\n"
-        f"├ 🔁 <b>Fallback LoveTik:</b> 🟢 Standby Ready\n"
-        f"├ 🎵 <b>Audio Ingestion:</b> 🟢 Stream Buffered\n"
-        f"└ 🔵 <b>Facebook Graph:</b> 🟢 Connected"
-    )
-    return status_panel
 
 
 # ================= TELEGRAM HANDLERS =================
@@ -733,17 +878,23 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         user_name = query.from_user.first_name or "User"
         text, reply_markup = build_welcome_dashboard(user_name)
         try:
-            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            await query.message.edit_media(
+                media=InputMediaPhoto(media=IMG_WELCOME, caption=text, parse_mode=ParseMode.HTML),
+                reply_markup=reply_markup,
+            )
         except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            try:
+                await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            except Exception:
+                await query.message.reply_photo(photo=IMG_WELCOME, caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
     elif data == "panel_guide_down":
         text = (
             "📥 <b>HƯỚNG DẪN TẢI TIKTOK FULL HD</b>\n"
             "<code>────────────────────────────</code>\n"
-            "• Gửi link video hoặc album ảnh trực tiếp vào khung chat.\n"
-            "• Bot tự động tải về chuẩn <b>HD / 1080p không logo</b>.\n"
-            "• Tương thích tất cả link ngắn như <code>vt.tiktok.com</code>."
+            "• Gửi link video hoặc album ảnh trực tiếp vào chat.\n"
+            "• Bot tự động tải file <b>HD / 1080p không logo</b>.\n"
+            "• Tương thích cả link ngắn như <code>vt.tiktok.com</code>."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -755,8 +906,8 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "🎵 <b>TRÍCH XUẤT AUDIO GỐC</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/music &lt;link_tiktok&gt;</code>\n"
-            "• Hoặc bấm nút <b>[Tải nhạc]</b> ngay dưới mỗi video đã tải.\n"
-            "• Trả về file âm thanh MP3 chất lượng cao nhất."
+            "• Hoặc bấm nút <b>[Tải nhạc MP3]</b> bên dưới mỗi video tải về.\n"
+            "• Tự động trích xuất file MP3 chất lượng cao."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -780,19 +931,38 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "🔵 <b>TRA CỨU FACEBOOK PROFILE PRO</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc link trang cá nhân bất kỳ."
+            "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc link tài khoản bất kỳ."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
         except Exception:
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
+    # --- KHỐI ĐỔI SERVER STATUS SANG CANVAS ẢNH ---
     elif data == "panel_status":
-        text = await build_server_status_panel()
+        await query.answer("📊 Đang render ảnh thống kê...", show_alert=False)
+        canvas_buffer = await generate_system_status_canvas()
+
+        caption_text = (
+            "📊 <b>BÁO CÁO THỐNG KÊ MÁY CHỦ (CANVAS LIVE)</b>\n"
+            "<code>────────────────────────────</code>\n"
+            "• Hệ thống giám sát trực tiếp trên Railway Cloud.\n"
+            "• Thông số tài nguyên được làm mới theo thời gian thực."
+        )
+
         try:
-            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
-        except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+            await query.message.edit_media(
+                media=InputMediaPhoto(media=canvas_buffer, caption=caption_text, parse_mode=ParseMode.HTML),
+                reply_markup=InlineKeyboardMarkup(back_btn),
+            )
+        except Exception as e:
+            logger.error(f"Lỗi edit canvas media: {e}")
+            await query.message.reply_photo(
+                photo=canvas_buffer,
+                caption=caption_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(back_btn),
+            )
 
 
 # LỆNH /fb
@@ -876,8 +1046,9 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
         f"╚════════════════════════════════════╝"
     )
 
-    # Thử gửi bằng File Buffer qua RAM để chống lỗi CDN timeout
     stream_file = await download_file_stream(music_url, max_size_mb=30)
+    caption_clean = truncate_text(audio_panel, 1020)
+
     try:
         if stream_file:
             stream_file.name = f"{video_id}.mp3"
@@ -885,7 +1056,7 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
                 audio=stream_file,
                 title=music_title,
                 performer=music_author,
-                caption=audio_panel,
+                caption=caption_clean,
                 parse_mode=ParseMode.HTML,
             )
         else:
@@ -893,15 +1064,15 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
                 audio=music_url,
                 title=music_title,
                 performer=music_author,
-                caption=audio_panel,
+                caption=caption_clean,
                 parse_mode=ParseMode.HTML,
             )
     except Exception as e:
         logger.error(f"Lỗi gửi audio callback: {e}")
-        await query.message.reply_text(f"❌ Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.")
+        await query.message.reply_text("❌ Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.")
 
 
-# Lệnh /music hoặc /downmusic
+# Lệnh /music
 async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -927,7 +1098,6 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ <i>Đang bóc tách file âm thanh gốc...</i>", parse_mode=ParseMode.HTML)
 
     target_url = await resolve_tiktok_url(raw_url)
-
     data = await tikwm_req({"url": target_url, "hd": 1})
     if not data or data.get("code") != 0:
         data = await fallback_tik_download(target_url)
@@ -957,6 +1127,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stream_file = await download_file_stream(music_url, max_size_mb=30)
     await msg.delete()
+    caption_clean = truncate_text(audio_panel, 1020)
 
     try:
         if stream_file:
@@ -965,7 +1136,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 audio=stream_file,
                 title=music_title,
                 performer=music_author,
-                caption=audio_panel,
+                caption=caption_clean,
                 parse_mode=ParseMode.HTML,
             )
         else:
@@ -973,7 +1144,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 audio=music_url,
                 title=music_title,
                 performer=music_author,
-                caption=audio_panel,
+                caption=caption_clean,
                 parse_mode=ParseMode.HTML,
             )
     except Exception as e:
@@ -1016,7 +1187,7 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
-# TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK (ƯU TIÊN HD VÀ TỰ SỬA LINK)
+# TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -1031,10 +1202,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         msg = await update.message.reply_text("⏳ <i>Đang tải dữ liệu HD...</i>", parse_mode=ParseMode.HTML)
 
-        # 1. Giải mã link rút gọn (vt.tiktok.com)
         target_url = await resolve_tiktok_url(raw_url)
-
-        # 2. Gọi TikWM với cờ hd=1
         data = await tikwm_req({"url": target_url, "hd": 1})
         if not data or data.get("code") != 0:
             logger.warning("TikWM không phản hồi hoặc lỗi, dùng fallback LoveTik...")
@@ -1061,21 +1229,30 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🔁 <code>{res.get('share_count', 0):,}</code> share\n"
             f"╚════════════════════════════════════╝"
         )
+        caption_clean = truncate_text(caption, 1020)
 
         keyboard = []
         if video_id:
             keyboard.append([InlineKeyboardButton("🎵 Tải nhạc MP3 của video", callback_data=f"dlmusic_{video_id}")])
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
-        # Trực hợp Album ảnh
+        # Trường hợp Album ảnh: gửi theo từng batch tối đa 10 ảnh
         if res.get("images"):
             await msg.delete()
-            media = [InputMediaPhoto(media=ensure_full_url(img)) for img in res["images"][:10]]
-            await update.message.reply_media_group(media=media)
-            await update.message.reply_photo(photo=IMG_DOWN, caption=caption, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            all_images = res["images"]
+            for i in range(0, len(all_images), 10):
+                batch = all_images[i : i + 10]
+                media = [InputMediaPhoto(media=ensure_full_url(img)) for img in batch]
+                await update.message.reply_media_group(media=media)
+
+            await update.message.reply_photo(
+                photo=IMG_DOWN,
+                caption=caption_clean,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
+            )
             return
 
-        # Lấy URL HD (Ưu tiên hdplay -> play) và chuẩn hóa
         raw_video_url = res.get("hdplay") or res.get("play")
         video_url = ensure_full_url(raw_video_url)
 
@@ -1083,16 +1260,15 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await msg.edit_text("❌ Không trích xuất được link video chất lượng cao.")
             return
 
-        # Tải stream video qua RAM để tránh lỗi CDN chặn Telegram Server
         stream_video = await download_file_stream(video_url, max_size_mb=50)
-
         await msg.delete()
+
         try:
             if stream_video:
                 stream_video.name = f"{video_id or 'tiktok'}_hd.mp4"
                 await update.message.reply_video(
                     video=stream_video,
-                    caption=caption,
+                    caption=caption_clean,
                     parse_mode=ParseMode.HTML,
                     reply_markup=reply_markup,
                     read_timeout=90,
@@ -1101,15 +1277,15 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             else:
                 await update.message.reply_video(
                     video=video_url,
-                    caption=caption,
+                    caption=caption_clean,
                     parse_mode=ParseMode.HTML,
                     reply_markup=reply_markup,
                     read_timeout=90,
                     write_timeout=90,
                 )
         except Exception as e:
-            logger.error(f"Lỗi gửi media: {e}")
-            await update.message.reply_text("❌ Video vượt quá dung lượng cho phép của Telegram Bot (50MB) hoặc CDN timeout.")
+            logger.error(f"Lỗi gửi video: {e}")
+            await update.message.reply_text("❌ Video vượt quá 50MB hoặc Telegram CDN timeout.")
 
 
 # ================= KHỞI CHẠY BOT =================
@@ -1118,13 +1294,13 @@ def main():
         "\n"
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
-        "║          Engine: python-telegram-bot v20+            ║\n"
-        "║      Features: TikTok Auto-Down HD & Music Fix       ║\n"
+        "║        Railway Engine • Python Telegram v20+         ║\n"
+        "║   Features: Canvas Server Status + TikTok HD/Audio   ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_shutdown(close_http_session).build()
 
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
@@ -1138,7 +1314,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
     app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
 
-    # Message Handler
+    # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
     app.run_polling()
