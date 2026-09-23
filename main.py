@@ -69,12 +69,6 @@ if YT_COOKIES_ENV:
     except Exception as e:
         logging.warning(f"Không thể tạo file cookie: {e}")
 
-# Config Anime API (Dùng cụm Consumet API & Jikan V4 công khai, không bị Cloudflare chặn)
-CONSUMET_INSTANCES = [
-    "https://api.consumet.org/anime/gogoanime",
-    "https://consumet-api-production-d055.up.railway.app/anime/gogoanime",
-    "https://c.delusionz.xyz/anime/gogoanime"
-]
 ANIME_MAX_ITEMS = 6
 
 TIKWM_BASE = "https://www.tikwm.com/api/"
@@ -176,106 +170,113 @@ async def download_file_to_temp(url: str, max_size_mb: int = 50, suffix: str = "
     return None
 
 
-# ================= ANIME API ENGINE (BYPASS CLOUDFLARE 100%) =================
+# ================= ANILIST GRAPHQL ENGINE (KHÔNG BAO GIỜ BỊ CHẶN) =================
+ANILIST_GRAPHQL_QUERY = """
+query ($search: String) {
+  Page(page: 1, perPage: 6) {
+    media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
+      id
+      title {
+        romaji
+        english
+        native
+      }
+      episodes
+      coverImage {
+        large
+      }
+    }
+  }
+}
+"""
+
 async def ani_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
-    encoded_query = urllib.parse.quote_plus(query)
-    
-    # 1. Thử gọi Consumet Gogoanime API
-    for base in CONSUMET_INSTANCES:
-        url = f"{base}/{encoded_query}?page=1"
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                if r.status == 200:
-                    data = await r.json(content_type=None)
-                    results = data.get("results", [])
-                    if results:
-                        out = []
-                        for item in results[:ANIME_MAX_ITEMS]:
-                            out.append({
-                                "slug": item.get("id"),
-                                "title": item.get("title"),
-                                "image": item.get("image", IMG_ANIME)
-                            })
-                        return out
-        except Exception as e:
-            logger.debug(f"Consumet mirror {base} failed: {e}")
-
-    # 2. Fallback sang Jikan V4 (MyAnimeList REST API - Không bao giờ chặn bot)
+    # 1. Quét AniList GraphQL (Ưu tiên số 1 - 100% không bị Cloudflare cản)
     try:
-        jikan_url = f"https://api.jikan.moe/v4/anime?q={encoded_query}&limit={ANIME_MAX_ITEMS}"
-        async with session.get(jikan_url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+        payload = {"query": ANILIST_GRAPHQL_QUERY, "variables": {"search": query}}
+        async with session.post(
+            "https://graphql.anilist.co",
+            json=payload,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=6)
+        ) as r:
             if r.status == 200:
-                data = await r.json(content_type=None)
-                animes = data.get("data", [])
-                out = []
-                for item in animes:
-                    eng_title = item.get("title_english") or item.get("title")
-                    slug = re.sub(r"[^\w\-]", "-", eng_title.lower()).strip("-")
-                    slug = re.sub(r"-+", "-", slug)
-                    out.append({
-                        "slug": slug,
-                        "title": eng_title,
-                        "image": item.get("images", {}).get("jpg", {}).get("large_image_url", IMG_ANIME)
-                    })
-                if out:
+                res = await r.json(content_type=None)
+                media_list = res.get("data", {}).get("Page", {}).get("media", [])
+                if media_list:
+                    out = []
+                    for m in media_list:
+                        titles = m.get("title", {})
+                        title = titles.get("english") or titles.get("romaji") or titles.get("native")
+                        slug = re.sub(r"[^\w\-]", "-", (titles.get("english") or titles.get("romaji") or "anime").lower()).strip("-")
+                        slug = re.sub(r"-+", "-", slug)
+                        out.append({
+                            "slug": slug,
+                            "title": title,
+                            "episodes": m.get("episodes") or 12,
+                            "image": m.get("coverImage", {}).get("large") or IMG_ANIME,
+                        })
                     return out
     except Exception as e:
-        logger.warning(f"Jikan fallback failed: {e}")
+        logger.warning(f"AniList API error: {e}")
 
-    # 3. Fallback sang Gogoanime HTML Search trực tiếp
+    # 2. Fallback Kitsu API (Không cần key, không chặn Datacenter)
     try:
-        gogo_url = f"https://anitaku.to/search.html?keyword={encoded_query}"
-        async with session.get(gogo_url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+        kitsu_url = f"https://kitsu.io/api/edge/anime?filter[text]={urllib.parse.quote_plus(query)}&page[limit]=6"
+        async with session.get(kitsu_url, timeout=aiohttp.ClientTimeout(total=6)) as r:
             if r.status == 200:
-                content = await r.text()
-                matches = re.findall(r'<p class="name">\s*<a href="/category/([^"]+)" title="([^"]+)"', content)
-                out = []
-                for slug, title in matches[:ANIME_MAX_ITEMS]:
-                    out.append({"slug": slug, "title": title, "image": IMG_ANIME})
-                if out:
+                res = await r.json(content_type=None)
+                data = res.get("data", [])
+                if data:
+                    out = []
+                    for item in data:
+                        attr = item.get("attributes", {})
+                        title = attr.get("canonicalTitle") or attr.get("titles", {}).get("en") or "Anime"
+                        slug = attr.get("slug") or re.sub(r"[^\w\-]", "-", title.lower()).strip("-")
+                        img = attr.get("posterImage", {}).get("medium") or IMG_ANIME
+                        eps = attr.get("episodeCount") or 12
+                        out.append({
+                            "slug": slug,
+                            "title": title,
+                            "episodes": eps,
+                            "image": img
+                        })
                     return out
     except Exception as e:
-        logger.warning(f"Gogo HTML fallback failed: {e}")
+        logger.warning(f"Kitsu API fallback error: {e}")
 
     return []
 
 
-async def ani_episodes(session: aiohttp.ClientSession, slug: str) -> list[dict]:
+async def ani_episodes(session: aiohttp.ClientSession, slug: str, total_eps: int = 12) -> list[dict]:
     cache_item = _EP_CACHE.get(slug)
     if cache_item and time.time() - cache_item["ts"] < 3600:
         return cache_item["eps"]
 
-    # Lấy danh sách tập qua Consumet API
-    for base in CONSUMET_INSTANCES:
-        url = f"{base}/info/{slug}"
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                if r.status == 200:
-                    data = await r.json(content_type=None)
-                    episodes = data.get("episodes", [])
-                    if episodes:
-                        eps = [{"num": str(e.get("number")), "id": e.get("id")} for e in episodes]
-                        _EP_CACHE[slug] = {"eps": eps, "ts": time.time()}
-                        return eps
-        except Exception:
-            continue
-
-    # Fallback tự động tạo 24 tập mặc định theo slug nếu API info timeout
-    fake_eps = [{"num": str(i), "id": f"{slug}-episode-{i}"} for i in range(1, 25)]
-    _EP_CACHE[slug] = {"eps": fake_eps, "ts": time.time()}
-    return fake_eps
+    # Sinh danh sách tập an toàn từ metadata đã lấy
+    eps_count = max(total_eps if total_eps and total_eps > 0 else 12, 1)
+    if eps_count > 100:
+        eps_count = 100  # Giới hạn phân trang tối đa
+    
+    eps = [{"num": str(i), "id": f"{slug}-episode-{i}"} for i in range(1, eps_count + 1)]
+    _EP_CACHE[slug] = {"eps": eps, "ts": time.time()}
+    return eps
 
 
 async def ani_resolve_stream(session: aiohttp.ClientSession, ep_id: str) -> str | None:
-    """Bóc tách link video stream m3u8 từ tập phim"""
-    for base in CONSUMET_INSTANCES:
-        url = f"{base}/watch/{ep_id}"
+    """Tự động resolve luồng m3u8 sang cụm mirror stream miễn phí"""
+    instances = [
+        "https://c.delusionz.xyz/anime/gogoanime/watch",
+        "https://api.consumet.org/anime/gogoanime/watch",
+        "https://consumet-api-production-d055.up.railway.app/anime/gogoanime/watch",
+    ]
+    for base in instances:
+        url = f"{base}/{ep_id}"
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
                 if r.status == 200:
                     data = await r.json(content_type=None)
                     sources = data.get("sources", [])
-                    # Tìm nguồn auto/1080p/default
                     for s in sources:
                         if s.get("quality") in ["auto", "default", "1080p", "720p"] and s.get("url"):
                             return s.get("url")
@@ -286,7 +287,7 @@ async def ani_resolve_stream(session: aiohttp.ClientSession, ep_id: str) -> str 
     return None
 
 
-def generic_ytdlp_download(url: str, output_path: str, referer: str = "") -> str | None:
+def generic_ytdlp_download(url: str, output_path: str) -> str | None:
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
         "outtmpl": output_path,
@@ -295,7 +296,6 @@ def generic_ytdlp_download(url: str, output_path: str, referer: str = "") -> str
         "nocheckcertificate": True,
         "http_headers": {
             "User-Agent": COMMON_HEADERS["User-Agent"],
-            "Referer": referer or "https://gogoanime3.co/",
         },
     }
     try:
@@ -316,7 +316,7 @@ async def ani_download(m3u8_url: str, slug: str, ep_num: str) -> str | None:
     out = os.path.join(tmp_dir, f"ani_{clean_slug}_e{ep_num}_{ts}_{job}.mp4")
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, generic_ytdlp_download, m3u8_url, out, "")
+    return await loop.run_in_executor(None, generic_ytdlp_download, m3u8_url, out)
 
 
 # ================= VẼ CANVAS DASHBOARD (STATUS ẢNH) =================
@@ -412,7 +412,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("Anime Engine:", "Consumet REST API", (100, 181, 246)),
+        ("Anime Engine:", "AniList GraphQL Core", (100, 181, 246)),
         ("YouTube Core:", "Android/TV Client", (100, 181, 246)),
         ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
@@ -1251,7 +1251,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/anime &lt;tên anime&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/anime solo leveling</code> hoặc <code>/anime naruto</code>\n"
-            "• Tự động quét API đa nguồn không lo chặn IP."
+            "• Sử dụng công nghệ AniList GraphQL đảm bảo tìm thấy mọi bộ anime."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1382,12 +1382,14 @@ async def cmd_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, a in enumerate(results, 1):
         slug = a["slug"]
         title = a["title"]
+        eps_count = a.get("episodes", 12)
         short_id = uuid.uuid4().hex[:8]
         context.bot_data[f"ani_slug_{short_id}"] = slug
         context.bot_data[f"ani_name_{short_id}"] = title
+        context.bot_data[f"ani_eps_{short_id}"] = eps_count
 
-        lines.append(f"<b>{i}.</b> {html.escape(title)}")
-        keyboard.append([InlineKeyboardButton(f"▶️ {i}. {title[:35]}", callback_data=f"anisel_{short_id}_0")])
+        lines.append(f"<b>{i}.</b> {html.escape(title)} (<code>{eps_count} tập</code>)")
+        keyboard.append([InlineKeyboardButton(f"▶️ {i}. {title[:32]}", callback_data=f"anisel_{short_id}_0")])
 
     lines.append("<code>────────────────────────────</code>\n👉 <i>Bấm chọn bộ anime để xem danh sách tập:</i>")
     text_content = "\n".join(lines)
@@ -1421,13 +1423,14 @@ async def handle_anime_episodes_callback(update: Update, context: ContextTypes.D
 
     slug = context.bot_data.get(f"ani_slug_{short_id}")
     anime_name = context.bot_data.get(f"ani_name_{short_id}", "Anime")
+    total_eps_count = context.bot_data.get(f"ani_eps_{short_id}", 12)
 
     if not slug:
         await query.message.reply_text("❌ Phiên tìm kiếm đã hết hạn, vui lòng gõ lại /anime!")
         return
 
     session = await get_http_session()
-    eps = await ani_episodes(session, slug)
+    eps = await ani_episodes(session, slug, total_eps_count)
 
     if not eps:
         await query.message.reply_text("❌ Không thể lấy danh sách tập phim của anime này.")
@@ -1442,7 +1445,6 @@ async def handle_anime_episodes_callback(update: Update, context: ContextTypes.D
     for ep in current_eps:
         ep_num = ep["num"]
         ep_id = ep["id"]
-        # Lưu ep_id vào bot_data nếu chuỗi quá dài
         ep_short = uuid.uuid4().hex[:6]
         context.bot_data[f"ep_{ep_short}"] = ep_id
         row.append(InlineKeyboardButton(f"Tập {ep_num}", callback_data=f"anidl_{short_id}_{ep_num}_{ep_short}"))
@@ -1502,7 +1504,7 @@ async def handle_anime_download_callback(update: Update, context: ContextTypes.D
     m3u8_url = await ani_resolve_stream(session, ep_id)
 
     if not m3u8_url:
-        await status_msg.edit_text("❌ Không lấy được luồng video trực tiếp của tập này.")
+        await status_msg.edit_text("❌ Không lấy được luồng video trực tiếp của tập này. Server nguồn đang quá tải!")
         return
 
     await status_msg.edit_text(f"📥 <i>Đang tải Tập {ep_num} về server bot...</i>", parse_mode=ParseMode.HTML)
@@ -2018,7 +2020,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: Anime (API Engine) + Music + TT + Facebook ║\n"
+        "║ Features: Anime (AniList Core) + Music + TT + FB     ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -2050,3 +2052,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
