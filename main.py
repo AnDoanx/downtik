@@ -70,6 +70,7 @@ if YT_COOKIES_ENV:
         logging.warning(f"Không thể tạo file cookie: {e}")
 
 ANIME_MAX_ITEMS = 6
+ALLANIME_API = "https://api.allanime.day/api"
 
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
@@ -89,6 +90,12 @@ COMMON_HEADERS = {
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
+ALLANIME_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Referer": "https://allanime.to",
+    "Accept": "application/json",
 }
 
 logging.basicConfig(
@@ -170,101 +177,187 @@ async def download_file_to_temp(url: str, max_size_mb: int = 50, suffix: str = "
     return None
 
 
-# ================= ANILIST GRAPHQL SEARCH =================
-ANILIST_GRAPHQL_QUERY = """
-query ($search: String) {
-  Page(page: 1, perPage: 6) {
-    media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
-      id
-      title {
-        romaji
-        english
-        native
-      }
-      episodes
-      coverImage {
-        large
-      }
+# ================= ALLANIME GRAPHQL ENGINE =================
+ALLANIME_SEARCH_QUERY = """
+query ($search: SearchInput, $limit: Int, $page: Int, $translationType: VaildTranslationTypeEnumType, $countryOrigin: VaildCountryOriginEnumType) {
+  shows(search: $search, limit: $limit, page: $page, translationType: $translationType, countryOrigin: $countryOrigin) {
+    edges {
+      _id
+      name
+      thumbnail
+      availableEpisodesDetail
     }
   }
 }
 """
 
-async def ani_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
+ALLANIME_EPISODES_QUERY = """
+query ($showId: String!) {
+  show(_id: $showId) {
+    _id
+    name
+    thumbnail
+    availableEpisodesDetail
+  }
+}
+"""
+
+ALLANIME_STREAM_QUERY = """
+query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+  episode(showId: $showId, translationType: $translationType, episodeString: $episodeString) {
+    sourceUrls
+  }
+}
+"""
+
+
+def _decode_allanime_source(encoded: str) -> str:
+    """Giải mã chuỗi hash link video từ AllAnime GraphQL sang URL thực tế."""
+    if not encoded.startswith("--"):
+        return encoded
     try:
-        payload = {"query": ANILIST_GRAPHQL_QUERY, "variables": {"search": query}}
-        async with session.post(
-            "https://graphql.anilist.co",
-            json=payload,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        hex_data = encoded[2:]
+        raw_bytes = bytes.fromhex(hex_data)
+        key = 56
+        decrypted = bytes([b ^ key for b in raw_bytes]).decode("utf-8")
+        return decrypted
+    except Exception:
+        return encoded
+
+
+async def ani_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
+    variables = {
+        "search": {"query": query},
+        "limit": ANIME_MAX_ITEMS,
+        "page": 1,
+        "translationType": "sub",
+        "countryOrigin": "ALL",
+    }
+    params = {"query": ALLANIME_SEARCH_QUERY, "variables": json.dumps(variables)}
+
+    try:
+        async with session.get(
+            ALLANIME_API,
+            params=params,
+            headers=ALLANIME_HEADERS,
             timeout=aiohttp.ClientTimeout(total=8),
         ) as r:
             if r.status == 200:
-                res = await r.json(content_type=None)
-                media_list = res.get("data", {}).get("Page", {}).get("media", [])
-                if media_list:
-                    out = []
-                    for m in media_list:
-                        titles = m.get("title", {})
-                        title = titles.get("english") or titles.get("romaji") or titles.get("native")
-                        raw_slug_base = titles.get("english") or titles.get("romaji") or "anime"
-                        slug = re.sub(r"[^\w\s-]", "", raw_slug_base.lower()).strip()
-                        slug = re.sub(r"[-\s]+", "-", slug)
-                        out.append({
-                            "slug": slug,
-                            "title": title,
-                            "episodes": m.get("episodes") or 12,
-                            "image": m.get("coverImage", {}).get("large") or IMG_ANIME,
-                        })
-                    return out
-    except Exception as e:
-        logger.warning(f"AniList API error: {e}")
+                data = await r.json(content_type=None)
+                shows = data.get("data", {}).get("shows", {}).get("edges", [])
+                out = []
+                for s in shows:
+                    show_id = s.get("_id")
+                    title = s.get("name")
+                    thumb = s.get("thumbnail") or IMG_ANIME
+                    ep_detail = s.get("availableEpisodesDetail", {}) or {}
+                    sub_eps = ep_detail.get("sub", [])
+                    eps_count = len(sub_eps) if sub_eps else 12
 
-    # Fallback Kitsu
-    try:
-        kitsu_url = f"https://kitsu.io/api/edge/anime?filter[text]={urllib.parse.quote_plus(query)}&page[limit]=6"
-        async with session.get(kitsu_url, timeout=aiohttp.ClientTimeout(total=8)) as r:
-            if r.status == 200:
-                res = await r.json(content_type=None)
-                data = res.get("data", [])
-                if data:
-                    out = []
-                    for item in data:
-                        attr = item.get("attributes", {})
-                        title = attr.get("canonicalTitle") or attr.get("titles", {}).get("en") or "Anime"
-                        slug = attr.get("slug") or re.sub(r"[^\w\-]", "-", title.lower()).strip("-")
-                        img = attr.get("posterImage", {}).get("medium") or IMG_ANIME
-                        eps = attr.get("episodeCount") or 12
+                    if show_id and title:
                         out.append({
-                            "slug": slug,
+                            "id": show_id,
                             "title": title,
-                            "episodes": eps,
-                            "image": img,
+                            "episodes": eps_count,
+                            "image": thumb if thumb.startswith("http") else f"https://wp.allanime.day{thumb}",
                         })
+                if out:
                     return out
     except Exception as e:
-        logger.warning(f"Kitsu API fallback error: {e}")
+        logger.warning(f"AllAnime search error: {e}")
 
     return []
 
 
-async def ani_episodes(session: aiohttp.ClientSession, slug: str, total_eps: int = 12) -> list[dict]:
-    cache_item = _EP_CACHE.get(slug)
+async def ani_episodes(session: aiohttp.ClientSession, show_id: str) -> list[dict]:
+    cache_item = _EP_CACHE.get(show_id)
     if cache_item and time.time() - cache_item["ts"] < 3600:
         return cache_item["eps"]
 
-    eps_count = max(total_eps if total_eps and total_eps > 0 else 12, 1)
-    if eps_count > 100:
-        eps_count = 100
+    variables = {"showId": show_id}
+    params = {"query": ALLANIME_EPISODES_QUERY, "variables": json.dumps(variables)}
 
-    eps = [{"num": str(i), "id": f"{slug}-episode-{i}"} for i in range(1, eps_count + 1)]
-    _EP_CACHE[slug] = {"eps": eps, "ts": time.time()}
-    return eps
+    try:
+        async with session.get(
+            ALLANIME_API,
+            params=params,
+            headers=ALLANIME_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as r:
+            if r.status == 200:
+                data = await r.json(content_type=None)
+                show = data.get("data", {}).get("show") or {}
+                ep_detail = show.get("availableEpisodesDetail", {}) or {}
+                sub_eps = ep_detail.get("sub", [])
+
+                def ep_sort_key(val):
+                    try:
+                        return float(val)
+                    except ValueError:
+                        return 0.0
+
+                sorted_eps = sorted(sub_eps, key=ep_sort_key)
+                eps = [{"num": str(e), "id": str(e)} for e in sorted_eps]
+                if eps:
+                    _EP_CACHE[show_id] = {"eps": eps, "ts": time.time()}
+                    return eps
+    except Exception as e:
+        logger.warning(f"AllAnime episodes error: {e}")
+
+    # Fallback 12 tập
+    fake_eps = [{"num": str(i), "id": str(i)} for i in range(1, 13)]
+    _EP_CACHE[show_id] = {"eps": fake_eps, "ts": time.time()}
+    return fake_eps
 
 
-# ================= BỘ BÓC TÁCH STREAM & NÉN VIDEO DƯỚI 50MB =================
+async def ani_resolve_stream_url(session: aiohttp.ClientSession, show_id: str, ep_num: str) -> str | None:
+    """Lấy link m3u8 hoặc mp4 CDN trực tiếp từ tập phim."""
+    variables = {
+        "showId": show_id,
+        "translationType": "sub",
+        "episodeString": ep_num,
+    }
+    params = {"query": ALLANIME_STREAM_QUERY, "variables": json.dumps(variables)}
+
+    try:
+        async with session.get(
+            ALLANIME_API,
+            params=params,
+            headers=ALLANIME_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as r:
+            if r.status == 200:
+                data = await r.json(content_type=None)
+                source_urls = data.get("data", {}).get("episode", {}).get("sourceUrls", [])
+                
+                # Ưu tiên các provider m3u8 phổ biến
+                for src in source_urls:
+                    raw_url = src.get("sourceUrl", "")
+                    decoded = _decode_allanime_source(raw_url)
+                    if not decoded:
+                        continue
+                    if decoded.startswith("//"):
+                        decoded = f"https:{decoded}"
+                    
+                    if "clock" in decoded or "repack" in decoded:
+                        resolved_url = f"https://allanime.day{decoded}" if decoded.startswith("/") else decoded
+                        return resolved_url
+                    if "m3u8" in decoded or "mp4" in decoded:
+                        return decoded
+
+                if source_urls:
+                    first_src = _decode_allanime_source(source_urls[0].get("sourceUrl", ""))
+                    if first_src.startswith("//"):
+                        first_src = f"https:{first_src}"
+                    return first_src
+    except Exception as e:
+        logger.warning(f"AllAnime resolve stream error: {e}")
+
+    return None
+
+
 def compress_video_ffmpeg(input_path: str, output_path: str) -> bool:
-    """Nén video về độ phân giải 480p/bitrate thấp để chắc chắn dưới 48MB."""
+    """Nén video về 480p bitrate thấp để đảm bảo dưới 48MB."""
     try:
         cmd = [
             "ffmpeg", "-y", "-i", input_path,
@@ -275,7 +368,7 @@ def compress_video_ffmpeg(input_path: str, output_path: str) -> bool:
             "-c:a", "aac",
             "-b:a", "64k",
             "-fs", "47M",
-            output_path
+            output_path,
         ]
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
         return res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
@@ -284,92 +377,56 @@ def compress_video_ffmpeg(input_path: str, output_path: str) -> bool:
         return False
 
 
-def download_anime_smart(slug: str, ep_num: str) -> tuple[str | None, str | None]:
-    """
-    Tải anime và tự động nén nếu file > 48MB.
-    Trả về: (file_path_để_gửi_telegram, link_xem_trực_tiếp_nếu_có)
-    """
+def download_stream_via_ytdlp(stream_url: str, show_id: str, ep_num: str) -> tuple[str | None, str | None]:
+    """Tải file video từ stream_url và tự động nén nếu file > 48MB."""
     tmp_dir = tempfile.gettempdir()
     ts = int(time.time())
     job = uuid.uuid4().hex[:6]
-    clean_slug = re.sub(r"[^\w\-]", "_", slug)[:25]
-    raw_out = os.path.join(tmp_dir, f"ani_raw_{clean_slug}_e{ep_num}_{ts}_{job}.mp4")
-    comp_out = os.path.join(tmp_dir, f"ani_comp_{clean_slug}_e{ep_num}_{ts}_{job}.mp4")
+    clean_id = re.sub(r"[^\w\-]", "_", show_id)[:15]
+    raw_out = os.path.join(tmp_dir, f"ani_raw_{clean_id}_e{ep_num}_{ts}_{job}.mp4")
+    comp_out = os.path.join(tmp_dir, f"ani_comp_{clean_id}_e{ep_num}_{ts}_{job}.mp4")
 
-    # Danh sách URL từ các host anime lớn
-    sources = [
-        f"https://anitaku.to/{slug}-episode-{ep_num}",
-        f"https://gogoanime3.co/{slug}-episode-{ep_num}",
-        f"https://gogoanime.pe/{slug}-episode-{ep_num}",
-        f"https://anitaku.to/{slug.replace('-tv', '')}-episode-{ep_num}",
-        f"https://gogoanime3.co/{slug.replace('-tv', '')}-episode-{ep_num}",
-    ]
-
-    direct_url = None
-
-    # 1. Trích xuất URL trực tiếp bằng yt-dlp
-    ydl_info_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
-    }
-    for src in sources:
-        try:
-            with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
-                info = ydl.extract_info(src, download=False)
-                if info:
-                    direct_url = info.get("url") or src
-                    break
-        except Exception:
-            continue
-
-    # 2. Tải bản dung lượng thấp (360p/480p) ưu tiên trước để không vượt 50MB
     ydl_dl_opts = {
-        "format": "best[height<=480][ext=mp4]/best[height<=720][ext=mp4]/best",
+        "format": "best[height<=480][ext=mp4]/best[height<=720][ext=mp4]/best[ext=mp4]/best",
         "outtmpl": raw_out,
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
         "http_headers": {
             "User-Agent": COMMON_HEADERS["User-Agent"],
+            "Referer": "https://allanime.to/",
         },
     }
 
-    downloaded = False
-    for src in sources:
-        try:
-            with yt_dlp.YoutubeDL(ydl_dl_opts) as ydl:
-                ydl.download([src])
-                if os.path.exists(raw_out) and os.path.getsize(raw_out) > 0:
-                    downloaded = True
-                    break
-        except Exception:
-            continue
-
-    if not downloaded or not os.path.exists(raw_out):
-        return None, direct_url
-
-    # 3. Kiểm tra dung lượng file
-    file_size_mb = os.path.getsize(raw_out) / (1024 * 1024)
-    if file_size_mb <= 48.0:
-        return raw_out, direct_url
-
-    # 4. Nếu file > 48MB, kích hoạt nén tự động bằng ffmpeg
-    success = compress_video_ffmpeg(raw_out, comp_out)
     try:
-        os.remove(raw_out)
-    except OSError:
-        pass
+        with yt_dlp.YoutubeDL(ydl_dl_opts) as ydl:
+            ydl.download([stream_url])
+            if os.path.exists(raw_out) and os.path.getsize(raw_out) > 0:
+                file_size_mb = os.path.getsize(raw_out) / (1024 * 1024)
+                if file_size_mb <= 48.0:
+                    return raw_out, stream_url
 
-    if success and os.path.exists(comp_out):
-        return comp_out, direct_url
+                success = compress_video_ffmpeg(raw_out, comp_out)
+                try:
+                    os.remove(raw_out)
+                except OSError:
+                    pass
 
-    return None, direct_url
+                if success and os.path.exists(comp_out):
+                    return comp_out, stream_url
+    except Exception as e:
+        logger.error(f"yt-dlp stream download fail: {e}")
+
+    return None, stream_url
 
 
-async def ani_download(slug: str, ep_num: str) -> tuple[str | None, str | None]:
+async def ani_download(session: aiohttp.ClientSession, show_id: str, ep_num: str) -> tuple[str | None, str | None]:
+    stream_url = await ani_resolve_stream_url(session, show_id, ep_num)
+    if not stream_url:
+        return None, None
+
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, download_anime_smart, slug, ep_num)
+    return await loop.run_in_executor(None, download_stream_via_ytdlp, stream_url, show_id, ep_num)
 
 
 # ================= VẼ CANVAS DASHBOARD (STATUS ẢNH) =================
@@ -465,7 +522,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("Anime Engine:", "Smart Compress (<50MB)", (100, 181, 246)),
+        ("Anime Engine:", "AllAnime GraphQL Core", (100, 181, 246)),
         ("YouTube Core:", "Android/TV Client", (100, 181, 246)),
         ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
@@ -1304,7 +1361,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/anime &lt;tên anime&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/anime solo leveling</code> hoặc <code>/anime naruto</code>\n"
-            "• Tự động nén thông minh để đảm bảo gửi trót lọt qua Telegram."
+            "• Nguồn phát AllAnime GraphQL, hỗ trợ nén video và cung cấp link xem trực tiếp."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1433,13 +1490,12 @@ async def cmd_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [f"🎬 <b>KẾT QUẢ TÌM KIẾM ANIME:</b> <i>{html.escape(query)}</i>\n<code>────────────────────────────</code>"]
 
     for i, a in enumerate(results, 1):
-        slug = a["slug"]
+        show_id = a["id"]
         title = a["title"]
         eps_count = a.get("episodes", 12)
         short_id = uuid.uuid4().hex[:8]
-        context.bot_data[f"ani_slug_{short_id}"] = slug
+        context.bot_data[f"ani_id_{short_id}"] = show_id
         context.bot_data[f"ani_name_{short_id}"] = title
-        context.bot_data[f"ani_eps_{short_id}"] = eps_count
 
         lines.append(f"<b>{i}.</b> {html.escape(title)} (<code>{eps_count} tập</code>)")
         keyboard.append([InlineKeyboardButton(f"▶️ {i}. {title[:32]}", callback_data=f"anisel_{short_id}_0")])
@@ -1474,16 +1530,15 @@ async def handle_anime_episodes_callback(update: Update, context: ContextTypes.D
     short_id = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 0
 
-    slug = context.bot_data.get(f"ani_slug_{short_id}")
+    show_id = context.bot_data.get(f"ani_id_{short_id}")
     anime_name = context.bot_data.get(f"ani_name_{short_id}", "Anime")
-    total_eps_count = context.bot_data.get(f"ani_eps_{short_id}", 12)
 
-    if not slug:
+    if not show_id:
         await query.message.reply_text("❌ Phiên tìm kiếm đã hết hạn, vui lòng gõ lại /anime!")
         return
 
     session = await get_http_session()
-    eps = await ani_episodes(session, slug, total_eps_count)
+    eps = await ani_episodes(session, show_id)
 
     if not eps:
         await query.message.reply_text("❌ Không thể lấy danh sách tập phim của anime này.")
@@ -1535,24 +1590,25 @@ async def handle_anime_download_callback(update: Update, context: ContextTypes.D
     query = update.callback_query
     if not query:
         return
-    await query.answer("⏳ Đang xử lý luồng tải...", show_alert=False)
+    await query.answer("⏳ Đang kết nối luồng tải...", show_alert=False)
 
     parts = query.data.split("_")
     short_id = parts[1]
     ep_num = parts[2]
 
-    slug = context.bot_data.get(f"ani_slug_{short_id}")
+    show_id = context.bot_data.get(f"ani_id_{short_id}")
     anime_name = context.bot_data.get(f"ani_name_{short_id}", "Anime")
 
-    if not slug:
+    if not show_id:
         await query.message.reply_text("❌ Lỗi phiên làm việc, vui lòng tìm kiếm lại bằng lệnh /anime!")
         return
 
     status_msg = await query.message.reply_text(
-        f"⚡ <i>Đang bóc tách & tải Tập {ep_num} (tự động tối ưu dung lượng)...</i>", parse_mode=ParseMode.HTML
+        f"⚡ <i>Đang bóc tách luồng phát Tập {ep_num} từ AllAnime CDN...</i>", parse_mode=ParseMode.HTML
     )
 
-    file_path, direct_url = await ani_download(slug, ep_num)
+    session = await get_http_session()
+    file_path, direct_url = await ani_download(session, show_id, ep_num)
 
     extra_keyboard = []
     if direct_url:
@@ -1563,11 +1619,10 @@ async def handle_anime_download_callback(update: Update, context: ContextTypes.D
         f"╔══════════ 🎬 <b>ANIME DOWNLOAD</b> ══════════╗\n"
         f"║ 🎥 <b>Bộ phim:</b> <b>{html.escape(anime_name)}</b>\n"
         f"║ 🎞️ <b>Tập:</b> {ep_num}\n"
-        f"║ ⚡ <b>Trạng thái:</b> Đã xử lý tương thích Telegram\n"
+        f"║ ⚡ <b>Nguồn:</b> AllAnime Core Player\n"
         f"╚════════════════════════════════════╝"
     )
 
-    # Nếu tải và nén thành công dưới 50MB
     if file_path and os.path.exists(file_path):
         await status_msg.edit_text("📤 <i>Đang gửi video lên Telegram...</i>", parse_mode=ParseMode.HTML)
         try:
@@ -1585,8 +1640,8 @@ async def handle_anime_download_callback(update: Update, context: ContextTypes.D
             logger.error(f"Lỗi gửi anime video: {e}")
             fallback_text = (
                 f"{caption}\n\n"
-                f"⚠️ <b>Lưu ý:</b> File vượt quá hạn mức Bot API của Telegram.\n"
-                f"👉 <i>Bạn có thể bấm nút bên dưới để xem/tải trực tiếp tốc độ cao:</i>"
+                f"⚠️ Video gốc chất lượng cao vượt mức giới hạn gửi trực tiếp của Telegram Bot.\n"
+                f"👉 <i>Bạn có thể bấm nút bên dưới để mở xem online hoặc tải về:</i>"
             )
             await status_msg.edit_text(fallback_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
         finally:
@@ -1596,14 +1651,13 @@ async def handle_anime_download_callback(update: Update, context: ContextTypes.D
                 except OSError:
                     pass
     else:
-        # Nếu server không thể nén hoặc stream bị chặn
         if direct_url:
             await status_msg.edit_text(
                 f"🎬 <b>{html.escape(anime_name)} - Tập {ep_num}</b>\n\n"
-                f"⚠️ Video gốc chất lượng cao (~200MB) vượt mức giới hạn gửi trực tiếp của Telegram Bot.\n"
-                f"👉 <b>Bấm link dưới đây để mở xem online hoặc tải về máy:</b>",
+                f"✅ Đã trích xuất thành công luồng phát chất lượng cao.\n"
+                f"👉 <b>Bấm nút bên dưới để mở xem trực tiếp hoặc tải bằng trình duyệt:</b>",
                 parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup
+                reply_markup=reply_markup,
             )
         else:
             await status_msg.edit_text("❌ Không lấy được luồng phát từ máy chủ nguồn. Vui lòng thử lại sau!")
@@ -2084,7 +2138,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: Anime Smart Stream/Compress + YT + TT + FB ║\n"
+        "║ Features: Anime AllAnime Engine + YT + TT + FB       ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
