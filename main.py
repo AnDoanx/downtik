@@ -8,7 +8,6 @@ import html
 import io
 import json
 import logging
-import math
 import os
 import platform
 import re
@@ -17,7 +16,7 @@ import tempfile
 import time
 import urllib.parse
 import aiohttp
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -85,8 +84,7 @@ COMMON_HEADERS = {
     "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-# ================= TELEGRAM CUSTOM ANIMATED EMOJI IDS =================
-# Emoji IDs chuẩn động từ Telegram packs
+# ================= TELEGRAM CUSTOM ANIMATED EMOJI =================
 EMOJI_LIGHTNING = '<tg-emoji emoji-id="5445284980978693997">⚡</tg-emoji>'
 EMOJI_FIRE = '<tg-emoji emoji-id="5425028464300288812">🔥</tg-emoji>'
 EMOJI_MUSIC = '<tg-emoji emoji-id="5370868453487948259">🎶</tg-emoji>'
@@ -99,7 +97,6 @@ EMOJI_CHECK = '<tg-emoji emoji-id="5427009714745517332">✅</tg-emoji>'
 EMOJI_CROSS = '<tg-emoji emoji-id="5465465476576576576">❌</tg-emoji>'
 EMOJI_DIAMOND = '<tg-emoji emoji-id="5472164874889707833">💎</tg-emoji>'
 EMOJI_HEART = '<tg-emoji emoji-id="5370940385583446059">❤️</tg-emoji>'
-EMOJI_STAR = '<tg-emoji emoji-id="5467406830491834925">⭐</tg-emoji>'
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
@@ -146,7 +143,7 @@ def ensure_full_url(url: str) -> str:
     return url
 
 
-# ================= STREAM BUFFER =================
+# ================= HỖ TRỢ STREAM BUFFER =================
 async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
     session = await get_http_session()
     try:
@@ -174,54 +171,41 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
     return None
 
 
-# ================= CANVAS ULTRA HD 4K ENGINE =================
-def draw_rounded_rect(draw, coords, radius, fill=None, outline=None, width=1):
-    x1, y1, x2, y2 = coords
-    draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill, outline=outline, width=width)
+# ================= CANVAS NÉT CĂNG CHUẨN ĐỘ PHÂN GIẢI TELEGRAM =================
+CACHED_FONT_DATA = None
 
+async def get_crisp_font(size: int, bold: bool = False):
+    global CACHED_FONT_DATA
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+        "arialbd.ttf" if bold else "arial.ttf",
+    ]
+    for p in font_paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                pass
 
-def draw_glow_card(base_img, coords, radius, fill, outline, glow_color, glow_size=20):
-    x1, y1, x2, y2 = coords
-    gx1 = max(0, x1 - glow_size)
-    gy1 = max(0, y1 - glow_size)
-    gx2 = min(base_img.width, x2 + glow_size)
-    gy2 = min(base_img.height, y2 + glow_size)
+    if CACHED_FONT_DATA is None:
+        try:
+            url = "https://raw.githubusercontent.com/googlefonts/roboto/main/src/hinted/Roboto-Bold.ttf" if bold else "https://raw.githubusercontent.com/googlefonts/roboto/main/src/hinted/Roboto-Regular.ttf"
+            session = await get_http_session()
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                if r.status == 200:
+                    CACHED_FONT_DATA = await r.read()
+        except Exception:
+            pass
 
-    glow_mask = Image.new("RGBA", (gx2 - gx1, gy2 - gy1), (0, 0, 0, 0))
-    gdraw = ImageDraw.Draw(glow_mask)
-    gdraw.rounded_rectangle(
-        [glow_size, glow_size, (x2 - x1) + glow_size, (y2 - y1) + glow_size],
-        radius=radius,
-        fill=glow_color,
-    )
-    glow_mask = glow_mask.filter(ImageFilter.GaussianBlur(glow_size // 2))
-    base_img.paste(glow_mask, (gx1, gy1), glow_mask)
+    if CACHED_FONT_DATA:
+        try:
+            return ImageFont.truetype(io.BytesIO(CACHED_FONT_DATA), size)
+        except Exception:
+            pass
 
-    draw = ImageDraw.Draw(base_img)
-    draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill, outline=outline, width=2)
-
-
-def draw_cpu_icon(draw, cx, cy, size=18, color=(94, 234, 212)):
-    half = size // 2
-    draw.rectangle([cx - half, cy - half, cx + half, cy + half], outline=color, width=3, fill=(15, 23, 42))
-    draw.rectangle([cx - half + 5, cy - half + 5, cx + half - 5, cy + half - 5], fill=color)
-    for offset in [-6, 0, 6]:
-        draw.line([cx + offset, cy - half, cx + offset, cy - half - 5], fill=color, width=2)
-        draw.line([cx + offset, cy + half, cx + offset, cy + half + 5], fill=color, width=2)
-        draw.line([cx - half, cy + offset, cx - half - 5, cy + offset], fill=color, width=2)
-        draw.line([cx + half, cy + offset, cx + half + 5, cy + offset], fill=color, width=2)
-
-
-def draw_signal_icon(draw, cx, cy, color=(74, 222, 128)):
-    bars = [(0, 10), (7, 16), (14, 22), (21, 28)]
-    for ox, h in bars:
-        draw.rounded_rectangle([cx + ox, cy + (28 - h), cx + ox + 4, cy + 28], radius=2, fill=color)
-
-
-def draw_cd_icon(draw, cx, cy, r=14, color=(244, 114, 182)):
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=3, fill=(20, 20, 35))
-    draw.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=color)
-    draw.arc([cx - r + 4, cy - r + 4, cx + r - 4, cy + r - 4], 45, 135, fill=(255, 255, 255), width=2)
+    return ImageFont.load_default()
 
 
 async def generate_system_status_canvas() -> io.BytesIO:
@@ -229,7 +213,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     days, remainder = divmod(uptime_sec, 86400)
     hours, remainder = divmod(remainder, 3600)
     minutes, seconds = divmod(remainder, 60)
-    uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days else f"{hours}h {minutes}m {seconds}s"
+    uptime_str = f"{days}d {hours}h {minutes}m" if days else f"{hours}h {minutes}m {seconds}s"
 
     session = await get_http_session()
     start_t = time.perf_counter()
@@ -247,177 +231,109 @@ async def generate_system_status_canvas() -> io.BytesIO:
         except Exception:
             ram_mb = 52.3
 
-    # Kích thước 2400 x 1500 (Độ nét cực cao cho màn hình OLED / Retina)
-    W, H = 2400, 1500
-    img = Image.new("RGBA", (W, H), (8, 12, 22, 255))
+    W, H = 1200, 820
+    img = Image.new("RGBA", (W, H), (15, 23, 42, 255))
     draw = ImageDraw.Draw(img)
 
-    # Hiệu ứng Gradient mờ & Matrix Dots
-    for y in range(0, H, 4):
-        alpha = int(15 * (1 - y / H))
-        draw.line([(0, y), (W, y)], fill=(20, 32, 60, alpha))
+    f_title = await get_crisp_font(26, bold=True)
+    f_badge = await get_crisp_font(18, bold=True)
+    f_head  = await get_crisp_font(21, bold=True)
+    f_key   = await get_crisp_font(18, bold=False)
+    f_val   = await get_crisp_font(18, bold=True)
+    f_bar   = await get_crisp_font(15, bold=True)
+    f_foot  = await get_crisp_font(16, bold=False)
 
-    grid_spacing = 45
-    for gx in range(30, W, grid_spacing):
-        for gy in range(30, H, grid_spacing):
-            draw.point((gx, gy), fill=(30, 42, 68, 180))
+    pad = 30
+    draw.rounded_rectangle([pad, pad, W - pad, H - pad], radius=24, fill=(24, 32, 56, 255), outline=(51, 65, 85, 255), width=2)
 
-    def load_font(size, bold=False):
-        font_candidates = [
-            "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            "arialbd.ttf" if bold else "arial.ttf",
-            "SegoeUI-Bold.ttf" if bold else "SegoeUI.ttf"
-        ]
-        for name in font_candidates:
-            try:
-                return ImageFont.truetype(name, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
+    hdr_h = 70
+    draw.rounded_rectangle([pad + 5, pad + 5, W - pad - 5, pad + 5 + hdr_h], radius=18, fill=(30, 41, 69, 255))
 
-    font_title = load_font(48, bold=True)
-    font_sub = load_font(26, bold=False)
-    font_sec = load_font(34, bold=True)
-    font_lbl = load_font(28, bold=False)
-    font_val = load_font(28, bold=True)
-    font_badge = load_font(26, bold=True)
-    font_foot = load_font(24, bold=False)
+    dot_y = pad + 5 + hdr_h // 2
+    draw.ellipse([pad + 30, dot_y - 8, pad + 46, dot_y + 8], fill=(239, 68, 68))
+    draw.ellipse([pad + 56, dot_y - 8, pad + 72, dot_y + 8], fill=(245, 158, 11))
+    draw.ellipse([pad + 82, dot_y - 8, pad + 98, dot_y + 8], fill=(34, 197, 94))
 
-    pad_x, pad_y = 80, 80
-    main_box = (pad_x, pad_y, W - pad_x, H - pad_y)
+    draw.text((pad + 120, dot_y), "SYSTEM METRICS MONITOR", fill=(255, 255, 255), font=f_title, anchor="lm")
 
-    draw_glow_card(
-        img,
-        main_box,
-        radius=36,
-        fill=(15, 20, 34, 245),
-        outline=(45, 60, 95, 255),
-        glow_color=(30, 58, 138, 70),
-        glow_size=30,
-    )
-    draw = ImageDraw.Draw(img)
+    ub_w, ub_h = 240, 40
+    ub_x2 = W - pad - 25
+    ub_x1 = ub_x2 - ub_w
+    draw.rounded_rectangle([ub_x1, dot_y - ub_h//2, ub_x2, dot_y + ub_h//2], radius=12, fill=(22, 101, 52, 220), outline=(34, 197, 94, 255), width=2)
+    draw.ellipse([ub_x1 + 16, dot_y - 5, ub_x1 + 26, dot_y + 5], fill=(74, 222, 128))
+    draw.text((ub_x1 + 38, dot_y), f"UPTIME: {uptime_str}", fill=(240, 253, 244), font=f_badge, anchor="lm")
 
-    # Top Control Bar (macOS Dock style)
-    top_h = 140
-    top_box = (pad_x + 10, pad_y + 10, W - pad_x - 10, pad_y + 10 + top_h)
-    draw_rounded_rect(draw, top_box, radius=28, fill=(22, 30, 50, 255), outline=(40, 54, 86, 255), width=2)
-
-    dot_r = 15
-    dot_y = pad_y + 10 + top_h // 2
-    buttons = [
-        (pad_x + 70, (255, 95, 87)),
-        (pad_x + 125, (254, 188, 46)),
-        (pad_x + 180, (40, 201, 64)),
-    ]
-    for bx, bcol in buttons:
-        draw.ellipse([bx - dot_r, dot_y - dot_r, bx + dot_r, dot_y + dot_r], fill=bcol)
-
-    draw.text((W // 2, dot_y - 18), "SYSTEM METRICS & HYPER ENGINE LIVE", fill=(255, 255, 255), font=font_title, anchor="mm")
-    draw.text((W // 2, dot_y + 28), "Realtime Performance Telemetry Monitoring • 4K UHD Canvas", fill=(148, 163, 184), font=font_sub, anchor="mm")
-
-    # Uptime Capsule
-    badge_w, badge_h = 360, 64
-    badge_x2 = W - pad_x - 45
-    badge_x1 = badge_x2 - badge_w
-    badge_y1 = dot_y - badge_h // 2
-    badge_y2 = badge_y1 + badge_h
-    draw_rounded_rect(draw, (badge_x1, badge_y1, badge_x2, badge_y2), radius=22, fill=(20, 83, 45, 120), outline=(34, 197, 94, 255), width=2)
-    draw.ellipse([badge_x1 + 25, dot_y - 8, badge_x1 + 41, dot_y + 8], fill=(74, 222, 128))
-    draw.text((badge_x1 + 58, dot_y), f"UPTIME: {uptime_str}", fill=(240, 253, 244), font=font_badge, anchor="lm")
-
-    # 2 Big Cards
-    card_w = (W - 2 * pad_x - 90) // 2
-    c1_x1 = pad_x + 35
+    card_w = (W - 2 * pad - 50) // 2
+    c1_x1 = pad + 18
     c1_x2 = c1_x1 + card_w
-    c2_x1 = c1_x2 + 20
+    c2_x1 = c1_x2 + 14
     c2_x2 = c2_x1 + card_w
-    card_y1 = pad_y + top_h + 35
-    card_y2 = H - pad_y - 110
 
-    # Vẽ 2 khối Glassmorphism
-    draw_glow_card(img, (c1_x1, card_y1, c1_x2, card_y2), radius=30, fill=(18, 25, 42, 230), outline=(42, 56, 88), glow_color=(14, 116, 144, 40), glow_size=18)
-    draw_glow_card(img, (c2_x1, card_y1, c2_x2, card_y2), radius=30, fill=(18, 25, 42, 230), outline=(42, 56, 88), glow_color=(190, 24, 93, 40), glow_size=18)
-    draw = ImageDraw.Draw(img)
+    card_y1 = pad + hdr_h + 22
+    card_y2 = H - pad - 60
 
-    # Header Card 1 (Vector CPU Icon)
-    draw_cpu_icon(draw, c1_x1 + 65, card_y1 + 55, size=24, color=(94, 234, 212))
-    draw.text((c1_x1 + 95, card_y1 + 55), "CORE INFRASTRUCTURE", fill=(94, 234, 212), font=font_sec, anchor="lm")
+    draw.rounded_rectangle([c1_x1, card_y1, c1_x2, card_y2], radius=18, fill=(18, 25, 45, 255), outline=(51, 65, 85, 200), width=2)
+    draw.rounded_rectangle([c2_x1, card_y1, c2_x2, card_y2], radius=18, fill=(18, 25, 45, 255), outline=(51, 65, 85, 200), width=2)
 
-    # Header Card 2 (Vector CD/Audio Icon)
-    draw_cd_icon(draw, c2_x1 + 65, card_y1 + 55, r=16, color=(244, 114, 182))
-    draw.text((c2_x1 + 95, card_y1 + 55), "MEDIA & APIS PIPELINE", fill=(244, 114, 182), font=font_sec, anchor="lm")
+    draw.text((c1_x1 + 25, card_y1 + 24), "⚡ CORE INFRASTRUCTURE", fill=(45, 212, 191), font=f_head)
+    draw.text((c2_x1 + 25, card_y1 + 24), "🎵 MEDIA & APIS PIPELINE", fill=(244, 114, 182), font=f_head)
 
-    draw.line([(c1_x1 + 45, card_y1 + 105), (c1_x2 - 45, card_y1 + 105)], fill=(38, 50, 78), width=2)
-    draw.line([(c2_x1 + 45, card_y1 + 105), (c2_x2 - 45, card_y1 + 105)], fill=(38, 50, 78), width=2)
+    draw.line([(c1_x1 + 25, card_y1 + 58), (c1_x2 - 25, card_y1 + 58)], fill=(51, 65, 85), width=2)
+    draw.line([(c2_x1 + 25, card_y1 + 58), (c2_x2 - 25, card_y1 + 58)], fill=(51, 65, 85), width=2)
 
-    now_vn = datetime.now().strftime("%H:%M:%S  •  %d/%m/%Y")
-    ping_status = "Optimal" if ping_ms < 200 else ("Moderate" if ping_ms < 600 else "High Delay")
-    ping_col = (74, 222, 128) if ping_ms < 200 else ((250, 204, 21) if ping_ms < 600 else (248, 113, 113))
+    now_vn = datetime.now().strftime("%H:%M:%S • %d/%m/%Y")
+    ping_status = "Tốt" if ping_ms < 200 else "Trung bình"
+    ping_color = (74, 222, 128) if ping_ms < 200 else (251, 191, 36)
 
-    c1_rows = [
-        ("Thời gian thực:", now_vn, (255, 255, 255)),
-        ("Telegram Ping:", f"{ping_ms} ms [{ping_status}]", ping_col),
-        ("Bộ nhớ RAM:", f"{ram_mb} MB Allocated", (251, 146, 60)),
-        ("Runtime Engine:", f"{platform.python_implementation()} {platform.python_version()}", (147, 197, 253)),
-        ("Host Platform:", f"{platform.system()} ({platform.machine()})", (209, 213, 219)),
-        ("Deploy Cluster:", "Railway Cloud Container", (192, 132, 252)),
+    c1_data = [
+        ("Thời gian:", now_vn, (255, 255, 255)),
+        ("Ping API:", f"{ping_ms} ms [{ping_status}]", ping_color),
+        ("RAM sử dụng:", f"{ram_mb} MB Allocated", (251, 146, 60)),
+        ("Python Core:", f"{platform.python_implementation()} {platform.python_version()}", (147, 197, 253)),
+        ("Hệ điều hành:", f"{platform.system()} ({platform.machine()})", (226, 232, 240)),
+        ("Nền tảng:", "Railway Cloud Engine", (192, 132, 252)),
     ]
 
-    c2_rows = [
-        ("TikWM Gateway:", "ONLINE (HD 1080p Ultra)", (74, 222, 128)),
-        ("YouTube Core:", "Android/TV Client Bypassed", (74, 222, 128)),
-        ("Audio Stream:", "Buffered Stream Pipeline", (147, 197, 253)),
-        ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (250, 204, 21)),
-        ("DRM Protection:", "Cipher Unpack Engine", (74, 222, 128)),
-        ("Node Region:", "Asia-Southeast Primary", (209, 213, 219)),
+    c2_data = [
+        ("TikWM Gateway:", "ONLINE (HD 1080p)", (74, 222, 128)),
+        ("YouTube Core:", "Android/TV Bypassed", (74, 222, 128)),
+        ("Audio Parser:", "Buffer Stream Async", (147, 197, 253)),
+        ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (251, 191, 36)),
+        ("DRM Engine:", "Cipher Unpack Online", (74, 222, 128)),
+        ("Server Cluster:", "Asia-Southeast Host", (226, 232, 240)),
     ]
 
-    row_y0 = card_y1 + 140
-    row_step = 82
+    y_start = card_y1 + 80
+    row_gap = 48
 
-    for idx, (label, val, col) in enumerate(c1_rows):
-        cy = row_y0 + idx * row_step
-        draw.text((c1_x1 + 50, cy), label, fill=(148, 163, 184), font=font_lbl)
-        draw.text((c1_x1 + 380, cy), val, fill=col, font=font_val)
+    for idx, (lbl, val, col) in enumerate(c1_data):
+        cy = y_start + idx * row_gap
+        draw.text((c1_x1 + 25, cy), lbl, fill=(148, 163, 184), font=f_key)
+        draw.text((c1_x1 + 210, cy), val, fill=col, font=f_val)
 
-    for idx, (label, val, col) in enumerate(c2_rows):
-        cy = row_y0 + idx * row_step
-        draw.text((c2_x1 + 50, cy), label, fill=(148, 163, 184), font=font_lbl)
-        draw.text((c2_x1 + 380, cy), val, fill=col, font=font_val)
+    for idx, (lbl, val, col) in enumerate(c2_data):
+        cy = y_start + idx * row_gap
+        draw.text((c2_x1 + 25, cy), lbl, fill=(148, 163, 184), font=f_key)
+        draw.text((c2_x1 + 210, cy), val, fill=col, font=f_val)
 
-    # Progress Bars (RAM vs Network Ping)
-    pb_y = card_y1 + 680
-    
-    # Progress RAM
-    draw.text((c1_x1 + 50, pb_y), "RAM UTILIZATION", fill=(148, 163, 184), font=load_font(24, bold=True))
-    draw_rounded_rect(draw, (c1_x1 + 50, pb_y + 40, c1_x2 - 50, pb_y + 68), radius=14, fill=(30, 41, 59))
+    pb_y = card_y1 + 385
+
+    draw.text((c1_x1 + 25, pb_y), "RAM UTILIZATION", fill=(203, 213, 225), font=f_bar)
+    draw.rounded_rectangle([c1_x1 + 25, pb_y + 24, c1_x2 - 25, pb_y + 44], radius=8, fill=(30, 41, 59))
     ram_ratio = min(max(ram_mb / 512, 0.08), 1.0)
-    ram_w = int((card_w - 100) * ram_ratio)
-    draw_rounded_rect(draw, (c1_x1 + 50, pb_y + 40, c1_x1 + 50 + ram_w, pb_y + 68), radius=14, fill=(249, 115, 22))
+    draw.rounded_rectangle([c1_x1 + 25, pb_y + 24, c1_x1 + 25 + int((card_w - 50) * ram_ratio), pb_y + 44], radius=8, fill=(249, 115, 22))
 
-    # Progress PING
-    draw_signal_icon(draw, c2_x1 + 50, pb_y - 5, color=(74, 222, 128))
-    draw.text((c2_x1 + 88, pb_y), "NETWORK HEALTH (PING)", fill=(148, 163, 184), font=load_font(24, bold=True))
-    draw_rounded_rect(draw, (c2_x1 + 50, pb_y + 40, c2_x2 - 50, pb_y + 68), radius=14, fill=(30, 41, 59))
-    ping_ratio = max(0.1, 1.0 - min(ping_ms / 1000, 0.9))
-    ping_w = int((card_w - 100) * ping_ratio)
-    draw_rounded_rect(draw, (c2_x1 + 50, pb_y + 40, c2_x1 + 50 + ping_w, pb_y + 68), radius=14, fill=(34, 197, 94))
+    draw.text((c2_x1 + 25, pb_y), "NETWORK HEALTH (PING)", fill=(203, 213, 225), font=f_bar)
+    draw.rounded_rectangle([c2_x1 + 25, pb_y + 24, c2_x2 - 25, pb_y + 44], radius=8, fill=(30, 41, 59))
+    ping_ratio = max(0.1, 1.0 - min(ping_ms / 800, 0.9))
+    draw.rounded_rectangle([c2_x1 + 25, pb_y + 24, c2_x1 + 25 + int((card_w - 50) * ping_ratio), pb_y + 44], radius=8, fill=(34, 197, 94))
 
-    # Footer
-    draw.text(
-        (W // 2, H - pad_y - 50),
-        "Railway Cloud High-Speed Worker • Multi-Threaded Engine v3.0 • Developed by An",
-        fill=(100, 116, 139),
-        font=font_foot,
-        anchor="mm",
-    )
+    draw.text((W // 2, H - pad - 26), "Railway Cloud High-Speed Worker • Multi-Platform Engine", fill=(148, 163, 184), font=f_foot, anchor="mm")
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
-    buf.name = "status_ultra_hd.png"
+    buf.name = "server_status.png"
     return buf
 
 
@@ -584,7 +500,6 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
         except Exception as err:
             logger.warning(f"Lỗi tải với clients {clients}: {err}")
 
-    # Fallback sang SoundCloud
     if search_query:
         logger.info(f"Kích hoạt SoundCloud fallback: {search_query}")
         sc_template = os.path.join(tmp_dir, f"sc_{video_id}_%(id)s.%(ext)s")
@@ -1318,7 +1233,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_status":
-        await query.answer("✨ Đang trích xuất chỉ số & Render Canvas 4K...", show_alert=False)
+        await query.answer("✨ Đang trích xuất chỉ số & Render Canvas HD...", show_alert=False)
         canvas_buffer = await generate_system_status_canvas()
 
         caption_text = (
@@ -1328,7 +1243,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             f"{EMOJI_CHECK} <b>Môi trường:</b> <i>Railway Cloud Container</i>\n"
             f"{EMOJI_DIAMOND} <b>Bypass Engine:</b> <i>DRM Unpack Online</i>\n"
             f"<code>────────────────────────────</code>\n"
-            f"<i>💡 Bản đồ thông số kết xuất với Canvas Ultra HD 4K sắc mịn.</i>"
+            f"<i>💡 Bản đồ thông số kết xuất với Canvas Ultra HD sắc mịn.</i>"
         )
 
         try:
@@ -1788,7 +1703,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: YouTube Music + Canvas 4K Status + TikTok  ║\n"
+        "║ Features: YouTube Music + Canvas HD Status + TikTok  ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
