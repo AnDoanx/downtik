@@ -42,15 +42,14 @@ import yt_dlp
 BOT_START_TIME = time.time()
 
 # ================= CẤU HÌNH TOKEN & MÔI TRƯỜNG =================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-if not BOT_TOKEN:
-    logging.warning("BOT_TOKEN chưa được cấu hình qua biến môi trường!")
-
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98").strip()
 ALLOWED_USERS: list[int] = []
 
 FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
-FB_TOKEN = os.getenv("FB_TOKEN", "").strip()
-FB_TOKENS = [FB_TOKEN] if FB_TOKEN else []
+raw_fb_token = os.getenv("FB_TOKEN", "").strip()
+FB_TOKENS = [raw_fb_token] if raw_fb_token else [
+    "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
+]
 
 # Hỗ trợ nạp cookies.txt cho YouTube
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
@@ -74,7 +73,6 @@ if YT_COOKIES_ENV:
 # Config HiAnime
 ANIME_BASE = os.getenv("ANIME_BASE", "https://hianime.to").rstrip("/")
 ANIME_MAX_ITEMS = int(os.getenv("ANIME_MAX_ITEMS", "6"))
-# Default key ani-cli fallback nếu không cấu hình
 ANIME_XOR_KEY = os.getenv("ANIME_XOR_KEY", "juli").encode("utf-8")
 ANIME_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -1452,7 +1450,6 @@ async def cmd_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, a in enumerate(results, 1):
         slug = a["slug"]
         title = a["title"]
-        # Lưu slug vào bot_data rút gọn để tránh vượt 64-byte callback Telegram
         short_id = uuid.uuid4().hex[:8]
         context.bot_data[f"ani_slug_{short_id}"] = slug
         context.bot_data[f"ani_name_{short_id}"] = title
@@ -1519,7 +1516,6 @@ async def handle_anime_episodes_callback(update: Update, context: ContextTypes.D
     if row:
         keyboard.append(row)
 
-    # Phân trang
     nav_row = []
     if page > 0:
         nav_row.append(InlineKeyboardButton("⬅️ Trước", callback_data=f"anisel_{short_id}_{page - 1}"))
@@ -1570,26 +1566,22 @@ async def handle_anime_download_callback(update: Update, context: ContextTypes.D
     )
 
     session = await get_http_session()
-    # 1. Tìm server hash
     server_info = await ani_server_hash(session, ep_id, dub=False)
     if not server_info:
         await status_msg.edit_text("❌ Không tìm thấy Server sub khả dụng cho tập này.")
         return
 
-    # 2. Giải mã URL embed XOR __P
     res_embed = await ani_resolve(session, server_info["hash"])
     if not res_embed.get("src"):
         await status_msg.edit_text(f"❌ Giải mã luồng video thất bại ({res_embed.get('error', 'unknown')}).")
         return
 
-    # 3. Lấy variant m3u8 có độ phân giải cao nhất
     master_m3u8 = res_embed["src"]
     referer = res_embed.get("referer", ANIME_BASE)
     best_m3u8 = await ani_best_variant(session, master_m3u8, referer)
 
     await status_msg.edit_text(f"📥 <i>Đang tải Tập {ep_num} về máy chủ bot...</i>", parse_mode=ParseMode.HTML)
 
-    # 4. Tải file về
     file_path = await ani_download(best_m3u8, referer, slug, ep_num)
     if not file_path or not os.path.exists(file_path):
         await status_msg.edit_text("❌ Tải tập phim thất bại hoặc vượt quá dung lượng cho phép.")
@@ -2093,7 +2085,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 # ================= KHỞI CHẠY BOT =================
 def main():
     if not BOT_TOKEN:
-        print("[!] Lỗi nghiêm trọng: BOT_TOKEN trống. Hãy thiết lập biến môi trường BOT_TOKEN.")
+        print("[!] Lỗi nghiêm trọng: BOT_TOKEN trống.")
         sys.exit(1)
 
     terminal_banner = (
