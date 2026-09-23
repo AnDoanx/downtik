@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from __future__ import annotations
-
 import asyncio
+from datetime import datetime
 import base64
 import html
 import io
@@ -12,14 +11,10 @@ import logging
 import os
 import platform
 import re
-import subprocess
 import sys
 import tempfile
 import time
 import urllib.parse
-import uuid
-from datetime import datetime
-
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 from telegram import (
@@ -41,18 +36,15 @@ import yt_dlp
 
 BOT_START_TIME = time.time()
 
-# ================= CẤU HÌNH TOKEN & MÔI TRƯỜNG =================
+# ================= CẤU HÌNH TOKEN & API =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98").strip()
-ALLOWED_USERS: list[int] = []
+ALLOWED_USERS = []
 
 FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
-raw_fb_token = os.getenv("FB_TOKEN", "").strip()
-FB_TOKENS = [raw_fb_token] if raw_fb_token else [
-    "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
-]
 
+# Hỗ trợ truyền cookies.txt qua biến môi trường để vượt 100% bản quyền YouTube
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
-COOKIE_FILE_PATH: str | None = None
+COOKIE_FILE_PATH = None
 
 if YT_COOKIES_ENV:
     try:
@@ -69,10 +61,13 @@ if YT_COOKIES_ENV:
     except Exception as e:
         logging.warning(f"Không thể tạo file cookie: {e}")
 
-ANIME_MAX_ITEMS = 6
-
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
+
+raw_fb_token = os.getenv("FB_TOKEN", "").strip()
+FB_TOKENS = [raw_fb_token] if raw_fb_token else [
+    "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
+]
 
 # Banner Images
 IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
@@ -81,7 +76,6 @@ IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b2
 IMG_DOWN = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png"
 IMG_FB = "https://cdn.phototourl.com/member/2026-09-20-9afea8db-8a1c-4ffb-9f41-68c26a82f2f5.jpg"
 IMG_SING = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
-IMG_ANIME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
 
 COMMON_HEADERS = {
     "User-Agent": (
@@ -98,7 +92,6 @@ logging.basicConfig(
 logger = logging.getLogger("MultiToolBot")
 
 HTTP_SESSION: aiohttp.ClientSession | None = None
-_EP_CACHE: dict = {}
 
 
 def is_authorized(user_id: int) -> bool:
@@ -137,201 +130,32 @@ def ensure_full_url(url: str) -> str:
     return url
 
 
-# ================= HỖ TRỢ STREAM / TẢI TỆP =================
-async def download_file_to_temp(url: str, max_size_mb: int = 50, suffix: str = ".mp4") -> str | None:
+# ================= HỖ TRỢ STREAM BUFFER =================
+async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
     session = await get_http_session()
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=45)) as resp:
-            if resp.status != 200:
-                return None
+            if resp.status == 200:
+                content_len = resp.headers.get("Content-Length")
+                if content_len and int(content_len) > max_size_mb * 1024 * 1024:
+                    return None
 
-            content_len = resp.headers.get("Content-Length")
-            if content_len and int(content_len) > max_size_mb * 1024 * 1024:
-                return None
+                buf = io.BytesIO()
+                total_downloaded = 0
+                max_bytes = max_size_mb * 1024 * 1024
 
-            fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-            total_downloaded = 0
-            max_bytes = max_size_mb * 1024 * 1024
-
-            with open(fd, "wb") as f:
                 async for chunk in resp.content.iter_chunked(64 * 1024):
                     total_downloaded += len(chunk)
                     if total_downloaded > max_bytes:
-                        try:
-                            os.remove(tmp_path)
-                        except OSError:
-                            pass
                         return None
-                    f.write(chunk)
+                    buf.write(chunk)
 
-            return tmp_path
+                buf.seek(0)
+                buf.name = "media.mp4"
+                return buf
     except Exception as e:
-        logger.error(f"Lỗi tải file tạm: {e}")
+        logger.error(f"Lỗi tải stream media: {e}")
     return None
-
-
-# ================= ANIME SEARCH ENGINE (JIKAN + KITSU REST API) =================
-async def ani_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
-    clean_q = urllib.parse.quote_plus(query.strip())
-
-    # 1. Quét qua Jikan v4 (Official MyAnimeList REST API - Không bao giờ chặn IP Datacenter)
-    try:
-        url = f"https://api.jikan.moe/v4/anime?q={clean_q}&limit={ANIME_MAX_ITEMS}&sfw=true"
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=7)) as r:
-            if r.status == 200:
-                data = await r.json(content_type=None)
-                animes = data.get("data", [])
-                if animes:
-                    out = []
-                    for item in animes:
-                        titles = item.get("titles", [])
-                        eng_title = item.get("title_english") or item.get("title")
-                        raw_slug = re.sub(r"[^\w\s-]", "", eng_title.lower()).strip()
-                        slug = re.sub(r"[-\s]+", "-", raw_slug)
-
-                        images = item.get("images", {}).get("jpg", {})
-                        thumb = images.get("large_image_url") or images.get("image_url") or IMG_ANIME
-                        eps = item.get("episodes") or 12
-
-                        out.append({
-                            "id": slug,
-                            "title": eng_title,
-                            "episodes": eps,
-                            "image": thumb,
-                        })
-                    if out:
-                        return out
-    except Exception as e:
-        logger.warning(f"Jikan API fail: {e}")
-
-    # 2. Fallback sang Kitsu API
-    try:
-        kitsu_url = f"https://kitsu.io/api/edge/anime?filter[text]={clean_q}&page[limit]={ANIME_MAX_ITEMS}"
-        async with session.get(kitsu_url, timeout=aiohttp.ClientTimeout(total=7)) as r:
-            if r.status == 200:
-                res = await r.json(content_type=None)
-                data = res.get("data", [])
-                if data:
-                    out = []
-                    for item in data:
-                        attr = item.get("attributes", {})
-                        title = attr.get("canonicalTitle") or attr.get("titles", {}).get("en") or "Anime"
-                        slug = attr.get("slug") or re.sub(r"[^\w\-]", "-", title.lower()).strip("-")
-                        img = attr.get("posterImage", {}).get("medium") or IMG_ANIME
-                        eps = attr.get("episodeCount") or 12
-                        out.append({
-                            "id": slug,
-                            "title": title,
-                            "episodes": eps,
-                            "image": img,
-                        })
-                    if out:
-                        return out
-    except Exception as e:
-        logger.warning(f"Kitsu API fail: {e}")
-
-    return []
-
-
-async def ani_episodes(session: aiohttp.ClientSession, slug: str, total_eps: int = 12) -> list[dict]:
-    cache_item = _EP_CACHE.get(slug)
-    if cache_item and time.time() - cache_item["ts"] < 3600:
-        return cache_item["eps"]
-
-    eps_count = max(total_eps if total_eps and total_eps > 0 else 12, 1)
-    if eps_count > 100:
-        eps_count = 100
-
-    eps = [{"num": str(i), "id": str(i)} for i in range(1, eps_count + 1)]
-    _EP_CACHE[slug] = {"eps": eps, "ts": time.time()}
-    return eps
-
-
-# ================= BỘ BÓC TÁCH VIDEO & NÉN DƯỚI 50MB =================
-def compress_video_ffmpeg(input_path: str, output_path: str) -> bool:
-    try:
-        cmd = [
-            "ffmpeg", "-y", "-i", input_path,
-            "-vf", "scale=-2:480",
-            "-c:v", "libx264",
-            "-crf", "30",
-            "-preset", "faster",
-            "-c:a", "aac",
-            "-b:a", "64k",
-            "-fs", "47M",
-            output_path,
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
-        return res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
-    except Exception as e:
-        logger.error(f"FFmpeg compress error: {e}")
-        return False
-
-
-def download_anime_multi_engine(slug: str, ep_num: str) -> tuple[str | None, str | None]:
-    tmp_dir = tempfile.gettempdir()
-    ts = int(time.time())
-    job = uuid.uuid4().hex[:6]
-    clean_id = re.sub(r"[^\w\-]", "_", slug)[:15]
-    raw_out = os.path.join(tmp_dir, f"ani_raw_{clean_id}_e{ep_num}_{ts}_{job}.mp4")
-    comp_out = os.path.join(tmp_dir, f"ani_comp_{clean_id}_e{ep_num}_{ts}_{job}.mp4")
-
-    # Các web stream video có thể trích xuất trực tiếp
-    candidate_sources = [
-        f"https://anitaku.to/{slug}-episode-{ep_num}",
-        f"https://gogoanime3.co/{slug}-episode-{ep_num}",
-        f"https://gogoanime.pe/{slug}-episode-{ep_num}",
-        f"https://animerulz.to/watch/{slug}-episode-{ep_num}",
-    ]
-
-    direct_url = f"https://anitaku.to/{slug}-episode-{ep_num}"
-
-    ydl_opts = {
-        "format": "best[height<=480][ext=mp4]/best[height<=720][ext=mp4]/best[ext=mp4]/best",
-        "outtmpl": raw_out,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
-        "http_headers": {
-            "User-Agent": COMMON_HEADERS["User-Agent"],
-        },
-    }
-
-    downloaded = False
-    for src in candidate_sources:
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(src, download=True)
-                if os.path.exists(raw_out) and os.path.getsize(raw_out) > 0:
-                    downloaded = True
-                    if info and info.get("url"):
-                        direct_url = info.get("url")
-                    break
-        except Exception:
-            continue
-
-    if not downloaded or not os.path.exists(raw_out):
-        return None, direct_url
-
-    file_size_mb = os.path.getsize(raw_out) / (1024 * 1024)
-    if file_size_mb <= 48.0:
-        return raw_out, direct_url
-
-    success = compress_video_ffmpeg(raw_out, comp_out)
-    try:
-        os.remove(raw_out)
-    except OSError:
-        pass
-
-    if success and os.path.exists(comp_out):
-        return comp_out, direct_url
-
-    return None, direct_url
-
-
-async def ani_download(slug: str, ep_num: str) -> tuple[str | None, str | None]:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, download_anime_multi_engine, slug, ep_num)
 
 
 # ================= VẼ CANVAS DASHBOARD (STATUS ẢNH) =================
@@ -355,13 +179,15 @@ async def generate_system_status_canvas() -> io.BytesIO:
     except Exception:
         ping_ms = 99
 
-    ram_mb = 42.5
+    ram_mb = 0.0
     if sys.platform != "win32":
         try:
             import resource
             ram_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
         except Exception:
-            pass
+            ram_mb = 42.5
+    else:
+        ram_mb = 42.5
 
     status_tag = "Mượt mà" if ping_ms < 250 else ("Bình thường" if ping_ms < 700 else "Chậm")
 
@@ -374,12 +200,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     draw_rounded_rect(draw, (padding, padding, width - padding, height - padding), radius=22, fill=(28, 35, 49, 255))
 
     header_h = 60
-    draw_rounded_rect(
-        draw,
-        (padding + 10, padding + 10, width - padding - 10, padding + 10 + header_h),
-        radius=14,
-        fill=(35, 44, 62, 255),
-    )
+    draw_rounded_rect(draw, (padding + 10, padding + 10, width - padding - 10, padding + 10 + header_h), radius=14, fill=(35, 44, 62, 255))
 
     dot_radius = 8
     dot_y = padding + 10 + header_h // 2
@@ -427,8 +248,8 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("Anime Engine:", "Jikan REST + Multi CDN", (100, 181, 246)),
         ("YouTube Core:", "Android/TV Client", (100, 181, 246)),
+        ("Audio Parser:", "BUFFER STREAM", (100, 181, 246)),
         ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
     ]
@@ -508,7 +329,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
                                     "title": title,
                                     "channel": channel,
                                     "duration_text": dur_text,
-                                    "url": f"https://www.youtube.com/watch?v={vid_id}",
+                                    "url": f"https://www.youtube.com/watch?v={vid_id}"
                                 })
 
                                 if len(results) >= max_results:
@@ -542,7 +363,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
                     "title": e.get("title", "Không rõ"),
                     "channel": e.get("channel") or e.get("uploader", "Không rõ"),
                     "duration_text": dur_text,
-                    "url": f"https://www.youtube.com/watch?v={e.get('id')}",
+                    "url": f"https://www.youtube.com/watch?v={e.get('id')}"
                 })
             return items
 
@@ -554,12 +375,11 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-# ================= TẢI AUDIO YOUTUBE & SOUNDCLOUD =================
-def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[str | None, dict]:
+# ================= TẢI AUDIO BYPASS BẢN QUYỀN & SOUNDCLOUD FALLBACK =================
+def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[io.BytesIO | None, dict]:
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     tmp_dir = tempfile.gettempdir()
-    out_id = uuid.uuid4().hex[:6]
-    output_template = os.path.join(tmp_dir, f"ytdl_{video_id}_{out_id}.%(ext)s")
+    output_template = os.path.join(tmp_dir, f"ytdl_{video_id}_%(id)s.%(ext)s")
 
     client_strategies = [
         ["android", "ios"],
@@ -578,12 +398,12 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                 "youtube": {
                     "player_client": clients,
                     "skip": ["dash", "hls"],
-                    "player_skip": ["configs", "webpage"],
+                    "player_skip": ["configs", "webpage"]
                 }
             },
             "http_headers": {
                 "User-Agent": "com.google.android.youtube/19.29.35 (Linux; U; Android 14) gzip"
-            },
+            }
         }
         if COOKIE_FILE_PATH:
             ydl_opts["cookiefile"] = COOKIE_FILE_PATH
@@ -598,18 +418,36 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                     "title": meta.get("title", "YouTube Track"),
                     "uploader": meta.get("uploader", "YouTube Artist"),
                     "duration": meta.get("duration", 0),
-                    "id": video_id,
+                    "id": video_id
                 }
 
+                downloaded_file = None
                 for fname in os.listdir(tmp_dir):
-                    if fname.startswith(f"ytdl_{video_id}_{out_id}"):
-                        return os.path.join(tmp_dir, fname), details
+                    if fname.startswith(f"ytdl_{video_id}"):
+                        downloaded_file = os.path.join(tmp_dir, fname)
+                        break
+
+                if downloaded_file and os.path.exists(downloaded_file):
+                    buf = io.BytesIO()
+                    with open(downloaded_file, "rb") as f:
+                        buf.write(f.read())
+                    buf.seek(0)
+                    ext = downloaded_file.split(".")[-1]
+                    buf.name = f"{video_id}.{ext}"
+
+                    try:
+                        os.remove(downloaded_file)
+                    except Exception:
+                        pass
+
+                    return buf, details
         except Exception as err:
             logger.warning(f"Lỗi tải với clients {clients}: {err}")
 
+    # Fallback sang SoundCloud nếu bài hát bị YouTube khóa DRM cứng trên Datacenter
     if search_query:
         logger.info(f"Kích hoạt SoundCloud fallback: {search_query}")
-        sc_template = os.path.join(tmp_dir, f"sc_{video_id}_{out_id}.%(ext)s")
+        sc_template = os.path.join(tmp_dir, f"sc_{video_id}_%(id)s.%(ext)s")
         sc_opts = {
             "format": "bestaudio/best",
             "outtmpl": sc_template,
@@ -627,12 +465,26 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                     "title": meta.get("title", "SoundCloud Audio"),
                     "uploader": meta.get("uploader", "SoundCloud Artist"),
                     "duration": meta.get("duration", 0),
-                    "id": video_id,
+                    "id": video_id
                 }
 
+                downloaded_file = None
                 for fname in os.listdir(tmp_dir):
-                    if fname.startswith(f"sc_{video_id}_{out_id}"):
-                        return os.path.join(tmp_dir, fname), details
+                    if fname.startswith(f"sc_{video_id}"):
+                        downloaded_file = os.path.join(tmp_dir, fname)
+                        break
+
+                if downloaded_file and os.path.exists(downloaded_file):
+                    buf = io.BytesIO()
+                    with open(downloaded_file, "rb") as f:
+                        buf.write(f.read())
+                    buf.seek(0)
+                    buf.name = f"{video_id}.mp3"
+                    try:
+                        os.remove(downloaded_file)
+                    except Exception:
+                        pass
+                    return buf, details
         except Exception as sc_err:
             logger.error(f"SoundCloud fallback thất bại: {sc_err}")
 
@@ -728,7 +580,9 @@ async def get_fb_id(input_str: str) -> str | None:
 
     try:
         async with session.post(
-            "https://id.traodoisub.com/api.php", data={"link": clean}, timeout=aiohttp.ClientTimeout(total=6)
+            "https://id.traodoisub.com/api.php",
+            data={"link": clean},
+            timeout=aiohttp.ClientTimeout(total=6),
         ) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
@@ -739,7 +593,8 @@ async def get_fb_id(input_str: str) -> str | None:
 
     try:
         async with session.get(
-            f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}", timeout=aiohttp.ClientTimeout(total=6)
+            f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}",
+            timeout=aiohttp.ClientTimeout(total=6),
         ) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
@@ -772,12 +627,16 @@ async def scrape_fb_full_details(uid: str) -> dict:
 
     try:
         async with session.get(
-            f"https://mbasic.facebook.com/{uid}", headers=headers, timeout=aiohttp.ClientTimeout(total=8)
+            f"https://mbasic.facebook.com/{uid}",
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=8),
         ) as r:
             if r.status == 200:
                 html_text = await r.text()
                 fol_match = re.search(
-                    r"(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)", html_text, re.IGNORECASE
+                    r"(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)",
+                    html_text,
+                    re.IGNORECASE,
                 )
                 if fol_match:
                     extracted["followers"] = fol_match.group(1).replace(".", "").replace(",", "").strip()
@@ -794,7 +653,9 @@ async def scrape_fb_full_details(uid: str) -> dict:
 
     try:
         async with session.get(
-            f"https://mbasic.facebook.com/{uid}/about", headers=headers, timeout=aiohttp.ClientTimeout(total=8)
+            f"https://mbasic.facebook.com/{uid}/about",
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=8),
         ) as r:
             if r.status == 200:
                 raw_html = await r.text()
@@ -840,12 +701,13 @@ async def scrape_fb_full_details(uid: str) -> dict:
                         extracted["followers"] = m_fol.group(1).replace(".", "").replace(",", "").strip()
 
                 redirect_links = re.findall(
-                    r'href="https?://(?:[a-z0-9-]+\.)?facebook\.com/l\.php\?u=([^"&]+)', raw_html
+                    r'href="https?://(?:[a-z0-9-]+\.)?facebook\.com/l\.php\?u=([^"&]+)',
+                    raw_html,
                 )
                 social_domains = [
                     "instagram.com", "tiktok.com", "youtube.com", "youtu.be",
                     "t.me", "threads.net", "twitter.com", "x.com", "github.com",
-                    "discord.gg", "linkedin.com", "pinterest.com", "spotify.com",
+                    "discord.gg", "linkedin.com", "pinterest.com", "spotify.com"
                 ]
                 found_links = set()
                 for raw_link in redirect_links:
@@ -947,8 +809,7 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     )
 
     badge = "💎 ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
-    avatar_token = FB_TOKENS[0] if FB_TOKENS else ""
-    avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={avatar_token}" if avatar_token else IMG_FB
+    avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
 
     social_lines = []
     for link in data.get("social_links", []):
@@ -1176,12 +1037,11 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
 def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboardMarkup]:
     display_name = html.escape(user_name)
     panel = (
-        f"⚡ <b>ALL-IN-ONE TOOLKIT BOT ONLINE</b> ⚡\n"
+        f"⚡ <b>TIKTOK & FACEBOOK & YOUTUBE TOOLKIT</b> ⚡\n"
         f"<code>────────────────────────────</code>\n"
         f"👋 Xin chào, <b>{display_name}</b>\n"
-        f"Hệ thống đa năng: Tải Anime HD, Nhạc YouTube, TikTok & Tra cứu Facebook.\n\n"
+        f"Hệ thống đa năng: Tải Media HD, Nghe nhạc YouTube & Tra cứu Profile.\n\n"
         f"📌 <b>LỆNH TRUY CẬP NHANH:</b>\n"
-        f"• 🎬 <b>Xem Anime:</b> <code>/anime &lt;tên anime&gt;</code>\n"
         f"• 🎶 <b>Nhạc YouTube:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
         f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto Full HD)\n"
         f"• 🎵 <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
@@ -1193,18 +1053,15 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
 
     keyboard = [
         [
-            InlineKeyboardButton("🎬 Tìm Anime HD", callback_data="panel_guide_anime"),
             InlineKeyboardButton("🎶 Tìm Nhạc YouTube", callback_data="panel_guide_sing"),
-        ],
-        [
             InlineKeyboardButton("📥 Tải TikTok", callback_data="panel_guide_down"),
+        ],
+        [
             InlineKeyboardButton("🎵 Tách Nhạc TikTok", callback_data="panel_guide_music"),
-        ],
-        [
             InlineKeyboardButton("🔎 Info TikTok", callback_data="panel_guide_info"),
-            InlineKeyboardButton("🔵 Info Facebook", callback_data="panel_guide_fb"),
         ],
         [
+            InlineKeyboardButton("🔵 Info Facebook", callback_data="panel_guide_fb"),
             InlineKeyboardButton("📊 Server Status", callback_data="panel_status"),
         ],
     ]
@@ -1213,7 +1070,7 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
 
 # ================= TELEGRAM HANDLERS =================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not is_authorized(update.effective_user.id):
+    if not is_authorized(update.effective_user.id):
         return
 
     user_name = update.effective_user.first_name or "User"
@@ -1239,8 +1096,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not query:
-        return
     await query.answer()
     data = query.data
 
@@ -1259,19 +1114,6 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
                 await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
             except Exception:
                 await query.message.reply_photo(photo=IMG_WELCOME, caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-
-    elif data == "panel_guide_anime":
-        text = (
-            "🎬 <b>HƯỚNG DẪN TẢI & XEM ANIME HD</b>\n"
-            "<code>────────────────────────────</code>\n"
-            "• Cú pháp: <code>/anime &lt;tên anime&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/anime solo leveling</code> hoặc <code>/anime naruto</code>\n"
-            "• Bóc tách trực tiếp và hỗ trợ nút xem Online tốc độ cao."
-        )
-        try:
-            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
-        except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_guide_sing":
         text = (
@@ -1361,217 +1203,9 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             )
 
 
-# ================= XỬ LÝ ANIME (/anime) =================
-async def cmd_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not is_authorized(update.effective_user.id):
-        return
-
-    if not context.args:
-        help_panel = (
-            f"╔════════ ⚠️ <b>THIẾU TÊN PHIM</b> ════════╗\n"
-            f"║ 📌 <b>Cú pháp:</b> <code>/anime &lt;tên phim&gt;</code>\n"
-            f"║ 💡 <i>Ví dụ: <code>/anime solo leveling</code></i>\n"
-            f"╚════════════════════════════════════╝"
-        )
-        try:
-            await update.message.reply_photo(photo=IMG_ANIME, caption=help_panel, parse_mode=ParseMode.HTML)
-        except Exception:
-            await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
-        return
-
-    query = " ".join(context.args).strip()
-    status_msg = await update.message.reply_text(
-        f"🔍 <i>Đang tìm kiếm anime:</i> <b>{html.escape(query)}</b>...", parse_mode=ParseMode.HTML
-    )
-
-    session = await get_http_session()
-    results = await ani_search(session, query)
-
-    if not results:
-        await status_msg.edit_text("❌ Không tìm thấy anime nào. Hãy thử từ khóa ngắn hơn!")
-        return
-
-    keyboard = []
-    lines = [f"🎬 <b>KẾT QUẢ TÌM KIẾM ANIME:</b> <i>{html.escape(query)}</i>\n<code>────────────────────────────</code>"]
-
-    for i, a in enumerate(results, 1):
-        slug = a["id"]
-        title = a["title"]
-        eps_count = a.get("episodes", 12)
-        short_id = uuid.uuid4().hex[:8]
-        context.bot_data[f"ani_id_{short_id}"] = slug
-        context.bot_data[f"ani_name_{short_id}"] = title
-        context.bot_data[f"ani_eps_{short_id}"] = eps_count
-
-        lines.append(f"<b>{i}.</b> {html.escape(title)} (<code>{eps_count} tập</code>)")
-        keyboard.append([InlineKeyboardButton(f"▶️ {i}. {title[:32]}", callback_data=f"anisel_{short_id}_0")])
-
-    lines.append("<code>────────────────────────────</code>\n👉 <i>Bấm chọn bộ anime để xem danh sách tập:</i>")
-    text_content = "\n".join(lines)
-
-    await status_msg.delete()
-    thumb_img = results[0].get("image") or IMG_ANIME
-    try:
-        await update.message.reply_photo(
-            photo=thumb_img,
-            caption=truncate_text(text_content, 1020),
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-    except Exception:
-        await update.message.reply_text(
-            truncate_text(text_content, 1020),
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-
-async def handle_anime_episodes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    parts = query.data.split("_")
-    short_id = parts[1]
-    page = int(parts[2]) if len(parts) > 2 else 0
-
-    slug = context.bot_data.get(f"ani_id_{short_id}")
-    anime_name = context.bot_data.get(f"ani_name_{short_id}", "Anime")
-    total_eps_count = context.bot_data.get(f"ani_eps_{short_id}", 12)
-
-    if not slug:
-        await query.message.reply_text("❌ Phiên tìm kiếm đã hết hạn, vui lòng gõ lại /anime!")
-        return
-
-    session = await get_http_session()
-    eps = await ani_episodes(session, slug, total_eps_count)
-
-    if not eps:
-        await query.message.reply_text("❌ Không thể lấy danh sách tập phim của anime này.")
-        return
-
-    page_size = 15
-    total_pages = (len(eps) + page_size - 1) // page_size
-    current_eps = eps[page * page_size : (page + 1) * page_size]
-
-    keyboard = []
-    row = []
-    for ep in current_eps:
-        ep_num = ep["num"]
-        row.append(InlineKeyboardButton(f"Tập {ep_num}", callback_data=f"anidl_{short_id}_{ep_num}"))
-        if len(row) == 3:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-
-    nav_row = []
-    if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ Trước", callback_data=f"anisel_{short_id}_{page - 1}"))
-    if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("Tiếp ➡️", callback_data=f"anisel_{short_id}_{page + 1}"))
-
-    if nav_row:
-        keyboard.append(nav_row)
-
-    caption = (
-        f"🎬 <b>DANH SÁCH TẬP: {html.escape(anime_name)}</b>\n"
-        f"<code>────────────────────────────</code>\n"
-        f"• Tổng số tập: <b>{len(eps)}</b> tập\n"
-        f"• Trang: <b>{page + 1}/{total_pages}</b>\n"
-        f"👉 <i>Bấm chọn tập để tải video:</i>"
-    )
-
-    try:
-        await query.message.edit_caption(
-            caption=caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    except Exception:
-        await query.message.edit_text(
-            caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-
-async def handle_anime_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer("⏳ Đang xử lý luồng tải...", show_alert=False)
-
-    parts = query.data.split("_")
-    short_id = parts[1]
-    ep_num = parts[2]
-
-    slug = context.bot_data.get(f"ani_id_{short_id}")
-    anime_name = context.bot_data.get(f"ani_name_{short_id}", "Anime")
-
-    if not slug:
-        await query.message.reply_text("❌ Lỗi phiên làm việc, vui lòng tìm kiếm lại bằng lệnh /anime!")
-        return
-
-    status_msg = await query.message.reply_text(
-        f"⚡ <i>Đang bóc tách & tải Tập {ep_num} (tự động tối ưu dung lượng)...</i>", parse_mode=ParseMode.HTML
-    )
-
-    file_path, direct_url = await ani_download(slug, ep_num)
-
-    extra_keyboard = []
-    if direct_url:
-        extra_keyboard.append([InlineKeyboardButton("🌐 Mở Xem Trực Tiếp / Tải Full HD", url=direct_url)])
-    reply_markup = InlineKeyboardMarkup(extra_keyboard) if extra_keyboard else None
-
-    caption = (
-        f"╔══════════ 🎬 <b>ANIME DOWNLOAD</b> ══════════╗\n"
-        f"║ 🎥 <b>Bộ phim:</b> <b>{html.escape(anime_name)}</b>\n"
-        f"║ 🎞️ <b>Tập:</b> {ep_num}\n"
-        f"║ ⚡ <b>Nguồn:</b> CDN Video Stream HD\n"
-        f"╚════════════════════════════════════╝"
-    )
-
-    if file_path and os.path.exists(file_path):
-        await status_msg.edit_text("📤 <i>Đang gửi video lên Telegram...</i>", parse_mode=ParseMode.HTML)
-        try:
-            with open(file_path, "rb") as vf:
-                await query.message.reply_video(
-                    video=vf,
-                    caption=truncate_text(caption, 1020),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=reply_markup,
-                    read_timeout=300,
-                    write_timeout=300,
-                )
-            await status_msg.delete()
-        except Exception as e:
-            logger.error(f"Lỗi gửi anime video: {e}")
-            fallback_text = (
-                f"{caption}\n\n"
-                f"⚠️ Video gốc chất lượng cao vượt mức giới hạn gửi trực tiếp của Telegram Bot.\n"
-                f"👉 <i>Bạn có thể bấm nút bên dưới để mở xem online hoặc tải về:</i>"
-            )
-            await status_msg.edit_text(fallback_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-        finally:
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except OSError:
-                    pass
-    else:
-        if direct_url:
-            await status_msg.edit_text(
-                f"🎬 <b>{html.escape(anime_name)} - Tập {ep_num}</b>\n\n"
-                f"✅ Đã kết nối thành công luồng phát video.\n"
-                f"👉 <b>Bấm nút bên dưới để xem trực tiếp hoặc tải Full HD:</b>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup,
-            )
-        else:
-            await status_msg.edit_text("❌ Không lấy được luồng phát từ máy chủ nguồn. Vui lòng thử lại sau!")
-
-
 # ================= XỬ LÝ LỆNH /sing =================
 async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not is_authorized(update.effective_user.id):
+    if not is_authorized(update.effective_user.id):
         return
 
     if not context.args:
@@ -1596,6 +1230,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!")
         return
 
+    # Lưu từ khóa vào context để fallback sang SoundCloud nếu cần
     context.bot_data[f"kw_{update.effective_chat.id}"] = keyword
 
     msg_lines = [f"🎶 <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
@@ -1639,8 +1274,6 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= CALLBACK TẢI AUDIO YOUTUBE =================
 async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not query:
-        return
     await query.answer("⏳ Đang tải audio...", show_alert=False)
     data = query.data
 
@@ -1652,11 +1285,11 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
     loading_msg = await query.message.reply_text("⏳ <i>Đang bóc tách audio và mở khóa bản quyền...</i>", parse_mode=ParseMode.HTML)
 
     loop = asyncio.get_running_loop()
-    file_path, details = await loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw)
+    stream_file, details = await loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw)
 
     await loading_msg.delete()
 
-    if not file_path or not os.path.exists(file_path):
+    if not stream_file:
         await query.message.reply_text("❌ Không thể tải được bài hát này. Hãy thử chọn bài số khác trong danh sách!")
         return
 
@@ -1672,28 +1305,21 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
     )
 
     try:
-        with open(file_path, "rb") as audio_file:
-            await query.message.reply_audio(
-                audio=audio_file,
-                title=title,
-                performer=uploader,
-                caption=truncate_text(caption, 1020),
-                parse_mode=ParseMode.HTML,
-            )
+        await query.message.reply_audio(
+            audio=stream_file,
+            title=title,
+            performer=uploader,
+            caption=truncate_text(caption, 1020),
+            parse_mode=ParseMode.HTML,
+        )
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
         await query.message.reply_text("❌ Kích thước tệp âm thanh vượt quá giới hạn truyền tải của bot.")
-    finally:
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except OSError:
-            pass
 
 
-# ================= LỆNH /fb =================
+# LỆNH /fb
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not is_authorized(update.effective_user.id):
+    if not is_authorized(update.effective_user.id):
         return
 
     if not context.args:
@@ -1736,11 +1362,9 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
-# ================= NÚT TẢI NHẠC TỪ TIKTOK =================
+# Nút callback tải nhạc dưới video TikTok
 async def handle_download_music_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not query:
-        return
     await query.answer("⏳ Đang tải audio...", show_alert=False)
     data = query.data
 
@@ -1774,19 +1398,19 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
         f"╚══════════════════════════════════════════╝"
     )
 
-    tmp_music_file = await download_file_to_temp(music_url, max_size_mb=30, suffix=".mp3")
+    stream_file = await download_file_stream(music_url, max_size_mb=30)
     caption_clean = truncate_text(audio_panel, 1020)
 
     try:
-        if tmp_music_file:
-            with open(tmp_music_file, "rb") as mf:
-                await query.message.reply_audio(
-                    audio=mf,
-                    title=music_title,
-                    performer=music_author,
-                    caption=caption_clean,
-                    parse_mode=ParseMode.HTML,
-                )
+        if stream_file:
+            stream_file.name = f"{video_id}.mp3"
+            await query.message.reply_audio(
+                audio=stream_file,
+                title=music_title,
+                performer=music_author,
+                caption=caption_clean,
+                parse_mode=ParseMode.HTML,
+            )
         else:
             await query.message.reply_audio(
                 audio=music_url,
@@ -1798,17 +1422,11 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
     except Exception as e:
         logger.error(f"Lỗi gửi audio callback: {e}")
         await query.message.reply_text("❌ Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.")
-    finally:
-        if tmp_music_file and os.path.exists(tmp_music_file):
-            try:
-                os.remove(tmp_music_file)
-            except OSError:
-                pass
 
 
-# ================= LỆNH /music =================
+# Lệnh /music
 async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not is_authorized(update.effective_user.id):
+    if not is_authorized(update.effective_user.id):
         return
 
     if not context.args:
@@ -1859,20 +1477,20 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"╚════════════════════════════════════════════╝"
     )
 
-    tmp_music_file = await download_file_to_temp(music_url, max_size_mb=30, suffix=".mp3")
+    stream_file = await download_file_stream(music_url, max_size_mb=30)
     await msg.delete()
     caption_clean = truncate_text(audio_panel, 1020)
 
     try:
-        if tmp_music_file:
-            with open(tmp_music_file, "rb") as mf:
-                await update.message.reply_audio(
-                    audio=mf,
-                    title=music_title,
-                    performer=music_author,
-                    caption=caption_clean,
-                    parse_mode=ParseMode.HTML,
-                )
+        if stream_file:
+            stream_file.name = f"{res.get('id', 'audio')}.mp3"
+            await update.message.reply_audio(
+                audio=stream_file,
+                title=music_title,
+                performer=music_author,
+                caption=caption_clean,
+                parse_mode=ParseMode.HTML,
+            )
         else:
             await update.message.reply_audio(
                 audio=music_url,
@@ -1884,17 +1502,11 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
         await update.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
-    finally:
-        if tmp_music_file and os.path.exists(tmp_music_file):
-            try:
-                os.remove(tmp_music_file)
-            except OSError:
-                pass
 
 
-# ================= LỆNH /getinfo =================
+# Lệnh /getinfo
 async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not is_authorized(update.effective_user.id):
+    if not is_authorized(update.effective_user.id):
         return
 
     if not context.args:
@@ -1927,9 +1539,9 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
-# ================= TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK =================
+# TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not is_authorized(update.effective_user.id):
+    if not is_authorized(update.effective_user.id):
         return
 
     text = update.message.text.strip()
@@ -1999,20 +1611,20 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await msg.edit_text("❌ Không trích xuất được link video chất lượng cao.")
             return
 
-        tmp_video_file = await download_file_to_temp(video_url, max_size_mb=50, suffix=".mp4")
+        stream_video = await download_file_stream(video_url, max_size_mb=50)
         await msg.delete()
 
         try:
-            if tmp_video_file:
-                with open(tmp_video_file, "rb") as vf:
-                    await update.message.reply_video(
-                        video=vf,
-                        caption=caption_clean,
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=reply_markup,
-                        read_timeout=90,
-                        write_timeout=90,
-                    )
+            if stream_video:
+                stream_video.name = f"{video_id or 'tiktok'}_hd.mp4"
+                await update.message.reply_video(
+                    video=stream_video,
+                    caption=caption_clean,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup,
+                    read_timeout=90,
+                    write_timeout=90,
+                )
             else:
                 await update.message.reply_video(
                     video=video_url,
@@ -2024,27 +1636,17 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
         except Exception as e:
             logger.error(f"Lỗi gửi video: {e}")
-            await update.message.reply_text("❌ Video vượt quá giới hạn 50MB của bot hoặc CDN Telegram phản hồi chậm.")
-        finally:
-            if tmp_video_file and os.path.exists(tmp_video_file):
-                try:
-                    os.remove(tmp_video_file)
-                except OSError:
-                    pass
+            await update.message.reply_text("❌ Video vượt quá 50MB hoặc Telegram CDN timeout.")
 
 
 # ================= KHỞI CHẠY BOT =================
 def main():
-    if not BOT_TOKEN:
-        print("[!] Lỗi nghiêm trọng: BOT_TOKEN trống.")
-        sys.exit(1)
-
     terminal_banner = (
         "\n"
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: Jikan Anime Core + Stream Direct + TikTok  ║\n"
+        "║ Features: YouTube Music + Canvas Server Status + TT  ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -2054,7 +1656,6 @@ def main():
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
-    app.add_handler(CommandHandler("anime", cmd_anime))
     app.add_handler(CommandHandler("sing", cmd_sing))
     app.add_handler(CommandHandler("getinfo", cmd_getinfo))
     app.add_handler(CommandHandler("music", cmd_music))
@@ -2062,11 +1663,9 @@ def main():
     app.add_handler(CommandHandler("fb", cmd_fb))
 
     # Callbacks
-    app.add_handler(CallbackQueryHandler(handle_anime_episodes_callback, pattern=r"^anisel_"))
-    app.add_handler(CallbackQueryHandler(handle_anime_download_callback, pattern=r"^anidl_"))
-    app.add_handler(CallbackQueryHandler(handle_youtube_download_callback, pattern=r"^ytdl_"))
-    app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern=r"^dlmusic_"))
-    app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern=r"^panel_"))
+    app.add_handler(CallbackQueryHandler(handle_youtube_download_callback, pattern="^ytdl_"))
+    app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
+    app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
 
     # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
