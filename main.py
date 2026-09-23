@@ -70,7 +70,12 @@ if YT_COOKIES_ENV:
     except Exception as e:
         logging.warning(f"Không thể tạo file cookie: {e}")
 
-# Config HiAnime
+# Config Anime Engine & Mirror Domains
+ANIME_SEARCH_DOMAINS = [
+    "https://hianime.to",
+    "https://aniwatchtv.to",
+    "https://kaido.to",
+]
 ANIME_BASE = os.getenv("ANIME_BASE", "https://hianime.to").rstrip("/")
 ANIME_MAX_ITEMS = int(os.getenv("ANIME_MAX_ITEMS", "6"))
 ANIME_XOR_KEY = os.getenv("ANIME_XOR_KEY", "juli").encode("utf-8")
@@ -207,26 +212,93 @@ def _strip_amp(text: str) -> str:
     return html.unescape(text).replace("&amp;", "&").strip()
 
 
+# Tìm kiếm đa luồng (Bypass Cloudflare & DuckDuckGo Fallback)
 async def ani_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
-    url = f"{ANIME_BASE}/search?keyword={urllib.parse.quote_plus(query)}"
-    try:
-        async with session.get(url, headers=ANIME_HEADERS, timeout=aiohttp.ClientTimeout(total=20)) as r:
-            if r.status != 200:
-                return []
-            content = await r.text(errors="ignore")
-    except Exception as e:
-        logger.warning(f"ani_search fail: {e}")
-        return []
+    search_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
+        "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
 
-    results = []
-    for m in re.finditer(r'<h3 class="film-name">\s*<a href="([^"]*/([^"/]+))"[^>]*title="([^"]*)"', content):
-        slug = m.group(2)
-        title = _strip_amp(m.group(3))
-        if slug and title:
-            results.append({"slug": slug, "title": title})
-        if len(results) >= ANIME_MAX_ITEMS:
-            break
-    return results
+    keyword = query.replace(" ", "+")
+    
+    # 1. Thử qua các domain mirror trực tiếp
+    for base in ANIME_SEARCH_DOMAINS:
+        url = f"{base}/search?keyword={keyword}"
+        search_headers["Referer"] = f"{base}/home"
+        try:
+            async with session.get(url, headers=search_headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                if r.status != 200:
+                    logger.warning(f"ani_search {base} trả status: {r.status}")
+                    continue
+                content = await r.text(errors="ignore")
+        except Exception as e:
+            logger.warning(f"ani_search {base} lỗi: {e}")
+            continue
+
+        results = []
+        blocks = re.findall(r'<div class="flw-item"[^>]*>([\s\S]*?)</div>\s*</div>', content)
+        if not blocks:
+            blocks = re.findall(r'<h3 class="film-name">([\s\S]*?)</h3>', content)
+
+        for blk in blocks:
+            m_a = re.search(r'<a\s+[^>]*href="(/watch/([^"?/]+)|\S*?/([^"?/]+))"[^>]*>', blk)
+            if not m_a:
+                continue
+            
+            slug = m_a.group(2) or m_a.group(3)
+            m_title = (
+                re.search(r'title="([^"]+)"', blk)
+                or re.search(r'data-jname="([^"]+)"', blk)
+                or re.search(r'>([^<]+)</a>', blk)
+            )
+            title = _strip_amp(m_title.group(1)) if m_title else slug
+
+            if slug and title:
+                if not any(item["slug"] == slug for item in results):
+                    results.append({"slug": slug, "title": title})
+
+            if len(results) >= ANIME_MAX_ITEMS:
+                break
+
+        if results:
+            return results
+
+    # 2. Fallback qua DuckDuckGo HTML nếu toàn bộ server bị Cloudflare chặn IP
+    try:
+        ddg_url = f"https://html.duckduckgo.com/html/?q=site:hianime.to/watch+{keyword}"
+        async with session.get(
+            ddg_url, headers={"User-Agent": search_headers["User-Agent"]}, timeout=aiohttp.ClientTimeout(total=10)
+        ) as r:
+            if r.status == 200:
+                html_text = await r.text()
+                matches = re.findall(
+                    r'href="[^"]*hianime\.to/watch/([^"?/]+)"[^>]*>([\s\S]*?)</a>',
+                    html_text,
+                    re.IGNORECASE
+                )
+                results = []
+                for slug, raw_title in matches:
+                    clean_title = re.sub(r"<[^>]+>", "", raw_title).strip()
+                    clean_title = clean_title.rsplit("-", 1)[0].replace("-", " ").title()
+                    if slug and clean_title and not any(x["slug"] == slug for x in results):
+                        results.append({"slug": slug.strip(), "title": clean_title})
+                    if len(results) >= ANIME_MAX_ITEMS:
+                        break
+                if results:
+                    return results
+    except Exception as e:
+        logger.warning(f"DuckDuckGo search fallback fail: {e}")
+
+    return []
 
 
 async def ani_episodes(session: aiohttp.ClientSession, slug: str) -> list[dict]:
@@ -235,32 +307,42 @@ async def ani_episodes(session: aiohttp.ClientSession, slug: str) -> list[dict]:
         return cache_item["eps"]
 
     anime_id = _anime_id(slug)
-    url = f"{ANIME_BASE}/api/theme/episode/list/{anime_id}"
     eps = []
-    try:
-        async with session.get(url, headers=ANIME_HEADERS, timeout=aiohttp.ClientTimeout(total=20)) as r:
-            if r.status == 200:
-                j = await r.json(content_type=None)
-                html_code = j.get("html", "") if isinstance(j, dict) else ""
-                for m in re.finditer(r'<[a-z0-9]+[^>]*\bdata-number="(\d+)"[^>]*\bdata-id="(\d+)"', html_code, re.I):
-                    eps.append({"num": m.group(1), "id": m.group(2)})
-    except Exception as e:
-        logger.warning(f"ani_episodes fail: {e}")
+
+    # Quét qua các domain đến khi lấy được danh sách tập
+    for base in ANIME_SEARCH_DOMAINS:
+        url = f"{base}/api/theme/episode/list/{anime_id}"
+        try:
+            async with session.get(url, headers=ANIME_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status == 200:
+                    j = await r.json(content_type=None)
+                    html_code = j.get("html", "") if isinstance(j, dict) else ""
+                    for m in re.finditer(r'<[a-z0-9]+[^>]*\bdata-number="(\d+)"[^>]*\bdata-id="(\d+)"', html_code, re.I):
+                        eps.append({"num": m.group(1), "id": m.group(2)})
+                    if eps:
+                        break
+        except Exception as e:
+            logger.warning(f"ani_episodes {base} fail: {e}")
 
     _EP_CACHE[slug] = {"eps": eps, "ts": time.time()}
     return eps
 
 
 async def ani_server_hash(session: aiohttp.ClientSession, ep_id: str, dub: bool = False) -> dict | None:
-    url = f"{ANIME_BASE}/api/theme/episode/servers?episodeId={ep_id}"
-    try:
-        async with session.get(url, headers=ANIME_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status != 200:
-                return None
-            j = await r.json(content_type=None)
-            html_code = j.get("html", "") if isinstance(j, dict) else ""
-    except Exception as e:
-        logger.warning(f"ani_server_hash fail: {e}")
+    html_code = ""
+    for base in ANIME_SEARCH_DOMAINS:
+        url = f"{base}/api/theme/episode/servers?episodeId={ep_id}"
+        try:
+            async with session.get(url, headers=ANIME_HEADERS, timeout=aiohttp.ClientTimeout(total=12)) as r:
+                if r.status == 200:
+                    j = await r.json(content_type=None)
+                    html_code = j.get("html", "") if isinstance(j, dict) else ""
+                    if html_code:
+                        break
+        except Exception:
+            continue
+
+    if not html_code:
         return None
 
     want = "dub" if dub else "sub"
@@ -480,7 +562,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("Anime Engine:", "HiAnime XOR Stream", (100, 181, 246)),
+        ("Anime Engine:", "Multi-Mirror + DDG", (100, 181, 246)),
         ("YouTube Core:", "Android/TV Client", (100, 181, 246)),
         ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
@@ -1441,7 +1523,7 @@ async def cmd_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = await ani_search(session, query)
 
     if not results:
-        await status_msg.edit_text("❌ Không tìm thấy bộ anime nào phù hợp. Vui lòng thử từ khóa khác!")
+        await status_msg.edit_text("❌ Không tìm thấy bộ anime nào phù hợp. Vui lòng thử từ khóa tiếng Anh hoặc từ khóa ngắn gọn hơn!")
         return
 
     keyboard = []
