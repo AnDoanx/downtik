@@ -8,6 +8,7 @@ import html
 import io
 import json
 import logging
+import math
 import os
 import platform
 import re
@@ -16,7 +17,7 @@ import tempfile
 import time
 import urllib.parse
 import aiohttp
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -42,7 +43,6 @@ ALLOWED_USERS = []
 
 FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
 
-# Hỗ trợ truyền cookies.txt qua biến môi trường để vượt 100% bản quyền YouTube
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
 COOKIE_FILE_PATH = None
 
@@ -69,7 +69,7 @@ FB_TOKENS = [raw_fb_token] if raw_fb_token else [
     "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
 ]
 
-# Banner Images
+# Banners
 IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
 IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
@@ -84,6 +84,22 @@ COMMON_HEADERS = {
     ),
     "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
 }
+
+# ================= TELEGRAM CUSTOM ANIMATED EMOJI IDS =================
+# Emoji IDs chuẩn động từ Telegram packs
+EMOJI_LIGHTNING = '<tg-emoji emoji-id="5445284980978693997">⚡</tg-emoji>'
+EMOJI_FIRE = '<tg-emoji emoji-id="5425028464300288812">🔥</tg-emoji>'
+EMOJI_MUSIC = '<tg-emoji emoji-id="5370868453487948259">🎶</tg-emoji>'
+EMOJI_DOWNLOAD = '<tg-emoji emoji-id="5373142273640907106">📥</tg-emoji>'
+EMOJI_SEARCH = '<tg-emoji emoji-id="5370953683070629739">🔍</tg-emoji>'
+EMOJI_STATUS = '<tg-emoji emoji-id="5370908757452662057">📊</tg-emoji>'
+EMOJI_GLOBE = '<tg-emoji emoji-id="5373117491763493721">🌐</tg-emoji>'
+EMOJI_AUDIO = '<tg-emoji emoji-id="5373038676915801456">🎵</tg-emoji>'
+EMOJI_CHECK = '<tg-emoji emoji-id="5427009714745517332">✅</tg-emoji>'
+EMOJI_CROSS = '<tg-emoji emoji-id="5465465476576576576">❌</tg-emoji>'
+EMOJI_DIAMOND = '<tg-emoji emoji-id="5472164874889707833">💎</tg-emoji>'
+EMOJI_HEART = '<tg-emoji emoji-id="5370940385583446059">❤️</tg-emoji>'
+EMOJI_STAR = '<tg-emoji emoji-id="5467406830491834925">⭐</tg-emoji>'
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
@@ -130,7 +146,7 @@ def ensure_full_url(url: str) -> str:
     return url
 
 
-# ================= HỖ TRỢ STREAM BUFFER =================
+# ================= STREAM BUFFER =================
 async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
     session = await get_http_session()
     try:
@@ -158,10 +174,54 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
     return None
 
 
-# ================= VẼ CANVAS DASHBOARD CYBER-GLASS SIÊU NÉT (2X RETINA) =================
+# ================= CANVAS ULTRA HD 4K ENGINE =================
 def draw_rounded_rect(draw, coords, radius, fill=None, outline=None, width=1):
     x1, y1, x2, y2 = coords
     draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill, outline=outline, width=width)
+
+
+def draw_glow_card(base_img, coords, radius, fill, outline, glow_color, glow_size=20):
+    x1, y1, x2, y2 = coords
+    gx1 = max(0, x1 - glow_size)
+    gy1 = max(0, y1 - glow_size)
+    gx2 = min(base_img.width, x2 + glow_size)
+    gy2 = min(base_img.height, y2 + glow_size)
+
+    glow_mask = Image.new("RGBA", (gx2 - gx1, gy2 - gy1), (0, 0, 0, 0))
+    gdraw = ImageDraw.Draw(glow_mask)
+    gdraw.rounded_rectangle(
+        [glow_size, glow_size, (x2 - x1) + glow_size, (y2 - y1) + glow_size],
+        radius=radius,
+        fill=glow_color,
+    )
+    glow_mask = glow_mask.filter(ImageFilter.GaussianBlur(glow_size // 2))
+    base_img.paste(glow_mask, (gx1, gy1), glow_mask)
+
+    draw = ImageDraw.Draw(base_img)
+    draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill, outline=outline, width=2)
+
+
+def draw_cpu_icon(draw, cx, cy, size=18, color=(94, 234, 212)):
+    half = size // 2
+    draw.rectangle([cx - half, cy - half, cx + half, cy + half], outline=color, width=3, fill=(15, 23, 42))
+    draw.rectangle([cx - half + 5, cy - half + 5, cx + half - 5, cy + half - 5], fill=color)
+    for offset in [-6, 0, 6]:
+        draw.line([cx + offset, cy - half, cx + offset, cy - half - 5], fill=color, width=2)
+        draw.line([cx + offset, cy + half, cx + offset, cy + half + 5], fill=color, width=2)
+        draw.line([cx - half, cy + offset, cx - half - 5, cy + offset], fill=color, width=2)
+        draw.line([cx + half, cy + offset, cx + half + 5, cy + offset], fill=color, width=2)
+
+
+def draw_signal_icon(draw, cx, cy, color=(74, 222, 128)):
+    bars = [(0, 10), (7, 16), (14, 22), (21, 28)]
+    for ox, h in bars:
+        draw.rounded_rectangle([cx + ox, cy + (28 - h), cx + ox + 4, cy + 28], radius=2, fill=color)
+
+
+def draw_cd_icon(draw, cx, cy, r=14, color=(244, 114, 182)):
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=3, fill=(20, 20, 35))
+    draw.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=color)
+    draw.arc([cx - r + 4, cy - r + 4, cx + r - 4, cy + r - 4], 45, 135, fill=(255, 255, 255), width=2)
 
 
 async def generate_system_status_canvas() -> io.BytesIO:
@@ -179,149 +239,176 @@ async def generate_system_status_canvas() -> io.BytesIO:
     except Exception:
         ping_ms = 85
 
-    ram_mb = 42.5
+    ram_mb = 45.0
     if sys.platform != "win32":
         try:
             import resource
             ram_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
         except Exception:
-            ram_mb = 48.2
+            ram_mb = 52.3
 
-    # Canvas 2X Resolution (2000 x 1300) sắc nét trên mọi màn hình
-    W, H = 2000, 1300
-    img = Image.new("RGBA", (W, H), (11, 15, 25, 255))
+    # Kích thước 2400 x 1500 (Độ nét cực cao cho màn hình OLED / Retina)
+    W, H = 2400, 1500
+    img = Image.new("RGBA", (W, H), (8, 12, 22, 255))
     draw = ImageDraw.Draw(img)
 
-    # Hiệu ứng nền ma trận chấm bi
-    grid_spacing = 50
-    for gx in range(40, W, grid_spacing):
-        for gy in range(40, H, grid_spacing):
-            draw.point((gx, gy), fill=(26, 35, 58, 255))
+    # Hiệu ứng Gradient mờ & Matrix Dots
+    for y in range(0, H, 4):
+        alpha = int(15 * (1 - y / H))
+        draw.line([(0, y), (W, y)], fill=(20, 32, 60, alpha))
+
+    grid_spacing = 45
+    for gx in range(30, W, grid_spacing):
+        for gy in range(30, H, grid_spacing):
+            draw.point((gx, gy), fill=(30, 42, 68, 180))
 
     def load_font(size, bold=False):
-        font_names = [
+        font_candidates = [
             "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/TTF/DejaVuSans.ttf",
             "arialbd.ttf" if bold else "arial.ttf",
+            "SegoeUI-Bold.ttf" if bold else "SegoeUI.ttf"
         ]
-        for name in font_names:
+        for name in font_candidates:
             try:
                 return ImageFont.truetype(name, size)
             except Exception:
                 continue
         return ImageFont.load_default()
 
-    font_brand = load_font(42, bold=True)
-    font_uptime_badge = load_font(28, bold=True)
-    font_sec_head = load_font(32, bold=True)
-    font_key = load_font(30, bold=False)
-    font_val = load_font(30, bold=True)
-    font_foot = load_font(26, bold=False)
+    font_title = load_font(48, bold=True)
+    font_sub = load_font(26, bold=False)
+    font_sec = load_font(34, bold=True)
+    font_lbl = load_font(28, bold=False)
+    font_val = load_font(28, bold=True)
+    font_badge = load_font(26, bold=True)
+    font_foot = load_font(24, bold=False)
 
-    pad_x, pad_y = 70, 70
-    draw_rounded_rect(draw, (pad_x, pad_y, W - pad_x, H - pad_y), radius=40, fill=(16, 22, 36, 235), outline=(38, 50, 78, 255), width=3)
+    pad_x, pad_y = 80, 80
+    main_box = (pad_x, pad_y, W - pad_x, H - pad_y)
 
-    # Header Bar phong cách macOS
-    hdr_h = 120
-    draw_rounded_rect(draw, (pad_x + 10, pad_y + 10, W - pad_x - 10, pad_y + 10 + hdr_h), radius=30, fill=(24, 32, 53, 255))
+    draw_glow_card(
+        img,
+        main_box,
+        radius=36,
+        fill=(15, 20, 34, 245),
+        outline=(45, 60, 95, 255),
+        glow_color=(30, 58, 138, 70),
+        glow_size=30,
+    )
+    draw = ImageDraw.Draw(img)
 
-    # Đèn tín hiệu Neon
-    dot_r = 14
-    dot_cy = pad_y + 10 + hdr_h // 2
-    dots = [
-        (pad_x + 65, (255, 95, 87)),   # Red
-        (pad_x + 115, (254, 188, 46)), # Yellow
-        (pad_x + 165, (40, 201, 64)),  # Green
+    # Top Control Bar (macOS Dock style)
+    top_h = 140
+    top_box = (pad_x + 10, pad_y + 10, W - pad_x - 10, pad_y + 10 + top_h)
+    draw_rounded_rect(draw, top_box, radius=28, fill=(22, 30, 50, 255), outline=(40, 54, 86, 255), width=2)
+
+    dot_r = 15
+    dot_y = pad_y + 10 + top_h // 2
+    buttons = [
+        (pad_x + 70, (255, 95, 87)),
+        (pad_x + 125, (254, 188, 46)),
+        (pad_x + 180, (40, 201, 64)),
     ]
-    for dx, dcol in dots:
-        draw.ellipse([dx - dot_r, dot_cy - dot_r, dx + dot_r, dot_cy + dot_r], fill=dcol)
+    for bx, bcol in buttons:
+        draw.ellipse([bx - dot_r, dot_y - dot_r, bx + dot_r, dot_y + dot_r], fill=bcol)
 
-    # Tiêu đề trung tâm
-    draw.text((W // 2, dot_cy), "⚡ SYSTEM METRICS & PERFORMANCE MONITOR ⚡", fill=(255, 255, 255), font=font_brand, anchor="mm")
+    draw.text((W // 2, dot_y - 18), "SYSTEM METRICS & HYPER ENGINE LIVE", fill=(255, 255, 255), font=font_title, anchor="mm")
+    draw.text((W // 2, dot_y + 28), "Realtime Performance Telemetry Monitoring • 4K UHD Canvas", fill=(148, 163, 184), font=font_sub, anchor="mm")
 
-    # Uptime Badge góc phải
-    badge_w, badge_h = 320, 56
-    badge_x2 = W - pad_x - 40
+    # Uptime Capsule
+    badge_w, badge_h = 360, 64
+    badge_x2 = W - pad_x - 45
     badge_x1 = badge_x2 - badge_w
-    badge_y1 = dot_cy - badge_h // 2
+    badge_y1 = dot_y - badge_h // 2
     badge_y2 = badge_y1 + badge_h
-    draw_rounded_rect(draw, (badge_x1, badge_y1, badge_x2, badge_y2), radius=20, fill=(35, 134, 54, 80), outline=(46, 160, 67), width=2)
-    draw.ellipse([badge_x1 + 22, dot_cy - 7, badge_x1 + 36, dot_cy + 7], fill=(63, 185, 80))
-    draw.text((badge_x1 + 52, dot_cy), f"UPTIME: {uptime_str}", fill=(230, 245, 230), font=font_uptime_badge, anchor="lm")
+    draw_rounded_rect(draw, (badge_x1, badge_y1, badge_x2, badge_y2), radius=22, fill=(20, 83, 45, 120), outline=(34, 197, 94, 255), width=2)
+    draw.ellipse([badge_x1 + 25, dot_y - 8, badge_x1 + 41, dot_y + 8], fill=(74, 222, 128))
+    draw.text((badge_x1 + 58, dot_y), f"UPTIME: {uptime_str}", fill=(240, 253, 244), font=font_badge, anchor="lm")
 
-    # 2 Cột Glass Card
-    card_w = (W - 2 * pad_x - 80) // 2
-    c1_x1 = pad_x + 30
+    # 2 Big Cards
+    card_w = (W - 2 * pad_x - 90) // 2
+    c1_x1 = pad_x + 35
     c1_x2 = c1_x1 + card_w
     c2_x1 = c1_x2 + 20
     c2_x2 = c2_x1 + card_w
-    card_y1 = pad_y + 160
-    card_y2 = H - pad_y - 100
+    card_y1 = pad_y + top_h + 35
+    card_y2 = H - pad_y - 110
 
-    draw_rounded_rect(draw, (c1_x1, card_y1, c1_x2, card_y2), radius=28, fill=(21, 28, 46, 210), outline=(45, 59, 92), width=2)
-    draw_rounded_rect(draw, (c2_x1, card_y1, c2_x2, card_y2), radius=28, fill=(21, 28, 46, 210), outline=(45, 59, 92), width=2)
+    # Vẽ 2 khối Glassmorphism
+    draw_glow_card(img, (c1_x1, card_y1, c1_x2, card_y2), radius=30, fill=(18, 25, 42, 230), outline=(42, 56, 88), glow_color=(14, 116, 144, 40), glow_size=18)
+    draw_glow_card(img, (c2_x1, card_y1, c2_x2, card_y2), radius=30, fill=(18, 25, 42, 230), outline=(42, 56, 88), glow_color=(190, 24, 93, 40), glow_size=18)
+    draw = ImageDraw.Draw(img)
 
-    # Tiêu đề Card
-    draw.text((c1_x1 + 45, card_y1 + 45), "🚀 CORE RUNTIME & HOST", fill=(94, 234, 212), font=font_sec_head)
-    draw.text((c2_x1 + 45, card_y1 + 45), "🔥 APIS & ENGINE DISPATCH", fill=(244, 114, 182), font=font_sec_head)
+    # Header Card 1 (Vector CPU Icon)
+    draw_cpu_icon(draw, c1_x1 + 65, card_y1 + 55, size=24, color=(94, 234, 212))
+    draw.text((c1_x1 + 95, card_y1 + 55), "CORE INFRASTRUCTURE", fill=(94, 234, 212), font=font_sec, anchor="lm")
 
-    draw.line([(c1_x1 + 40, card_y1 + 95), (c1_x2 - 40, card_y1 + 95)], fill=(38, 50, 78), width=2)
-    draw.line([(c2_x1 + 40, card_y1 + 95), (c2_x2 - 40, card_y1 + 95)], fill=(38, 50, 78), width=2)
+    # Header Card 2 (Vector CD/Audio Icon)
+    draw_cd_icon(draw, c2_x1 + 65, card_y1 + 55, r=16, color=(244, 114, 182))
+    draw.text((c2_x1 + 95, card_y1 + 55), "MEDIA & APIS PIPELINE", fill=(244, 114, 182), font=font_sec, anchor="lm")
 
-    now_vn = datetime.now().strftime("%H:%M:%S • %d/%m/%Y")
-    ping_status = "Optimal (Fast)" if ping_ms < 200 else ("Good" if ping_ms < 600 else "Degraded")
-    ping_color = (74, 222, 128) if ping_ms < 200 else ((250, 204, 21) if ping_ms < 600 else (248, 113, 113))
+    draw.line([(c1_x1 + 45, card_y1 + 105), (c1_x2 - 45, card_y1 + 105)], fill=(38, 50, 78), width=2)
+    draw.line([(c2_x1 + 45, card_y1 + 105), (c2_x2 - 45, card_y1 + 105)], fill=(38, 50, 78), width=2)
 
-    left_rows = [
+    now_vn = datetime.now().strftime("%H:%M:%S  •  %d/%m/%Y")
+    ping_status = "Optimal" if ping_ms < 200 else ("Moderate" if ping_ms < 600 else "High Delay")
+    ping_col = (74, 222, 128) if ping_ms < 200 else ((250, 204, 21) if ping_ms < 600 else (248, 113, 113))
+
+    c1_rows = [
         ("Thời gian thực:", now_vn, (255, 255, 255)),
-        ("Telegram Ping:", f"{ping_ms} ms [{ping_status}]", ping_color),
+        ("Telegram Ping:", f"{ping_ms} ms [{ping_status}]", ping_col),
         ("Bộ nhớ RAM:", f"{ram_mb} MB Allocated", (251, 146, 60)),
-        ("Python Version:", f"{platform.python_implementation()} {platform.python_version()}", (147, 197, 253)),
-        ("Hệ điều hành:", f"{platform.system()} ({platform.machine()})", (209, 213, 219)),
-        ("Cloud Platform:", "Railway Cloud Engine", (192, 132, 252)),
+        ("Runtime Engine:", f"{platform.python_implementation()} {platform.python_version()}", (147, 197, 253)),
+        ("Host Platform:", f"{platform.system()} ({platform.machine()})", (209, 213, 219)),
+        ("Deploy Cluster:", "Railway Cloud Container", (192, 132, 252)),
     ]
 
-    right_rows = [
-        ("TikWM Gateway:", "ONLINE (HD 1080p Stream)", (74, 222, 128)),
+    c2_rows = [
+        ("TikWM Gateway:", "ONLINE (HD 1080p Ultra)", (74, 222, 128)),
         ("YouTube Core:", "Android/TV Client Bypassed", (74, 222, 128)),
-        ("Media Stream:", "Async ByteStream Pipeline", (147, 197, 253)),
-        ("SoundCloud FB:", "ENABLED (Auto Fallback)", (250, 204, 21)),
-        ("Token Manager:", "Active Rotator Shield", (147, 197, 253)),
-        ("Server Cluster:", "Asia-Southeast Primary", (209, 213, 219)),
+        ("Audio Stream:", "Buffered Stream Pipeline", (147, 197, 253)),
+        ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (250, 204, 21)),
+        ("DRM Protection:", "Cipher Unpack Engine", (74, 222, 128)),
+        ("Node Region:", "Asia-Southeast Primary", (209, 213, 219)),
     ]
 
-    start_inner_y = card_y1 + 130
-    row_step = 72
+    row_y0 = card_y1 + 140
+    row_step = 82
 
-    for idx, (label, val, col) in enumerate(left_rows):
-        cy = start_inner_y + idx * row_step
-        draw.text((c1_x1 + 45, cy), label, fill=(148, 163, 184), font=font_key)
-        draw.text((c1_x1 + 330, cy), val, fill=col, font=font_val)
+    for idx, (label, val, col) in enumerate(c1_rows):
+        cy = row_y0 + idx * row_step
+        draw.text((c1_x1 + 50, cy), label, fill=(148, 163, 184), font=font_lbl)
+        draw.text((c1_x1 + 380, cy), val, fill=col, font=font_val)
 
-    for idx, (label, val, col) in enumerate(right_rows):
-        cy = start_inner_y + idx * row_step
-        draw.text((c2_x1 + 45, cy), label, fill=(148, 163, 184), font=font_key)
-        draw.text((c2_x1 + 330, cy), val, fill=col, font=font_val)
+    for idx, (label, val, col) in enumerate(c2_rows):
+        cy = row_y0 + idx * row_step
+        draw.text((c2_x1 + 50, cy), label, fill=(148, 163, 184), font=font_lbl)
+        draw.text((c2_x1 + 380, cy), val, fill=col, font=font_val)
 
-    # Progress Bars (RAM & Ping)
-    pb_y = card_y1 + 590
-    draw.text((c1_x1 + 45, pb_y), "RAM USAGE", fill=(148, 163, 184), font=load_font(22, bold=True))
-    draw_rounded_rect(draw, (c1_x1 + 45, pb_y + 35, c1_x2 - 45, pb_y + 55), radius=10, fill=(30, 41, 59))
+    # Progress Bars (RAM vs Network Ping)
+    pb_y = card_y1 + 680
+    
+    # Progress RAM
+    draw.text((c1_x1 + 50, pb_y), "RAM UTILIZATION", fill=(148, 163, 184), font=load_font(24, bold=True))
+    draw_rounded_rect(draw, (c1_x1 + 50, pb_y + 40, c1_x2 - 50, pb_y + 68), radius=14, fill=(30, 41, 59))
     ram_ratio = min(max(ram_mb / 512, 0.08), 1.0)
-    ram_fill_w = int((card_w - 90) * ram_ratio)
-    draw_rounded_rect(draw, (c1_x1 + 45, pb_y + 35, c1_x1 + 45 + ram_fill_w, pb_y + 55), radius=10, fill=(249, 115, 22))
+    ram_w = int((card_w - 100) * ram_ratio)
+    draw_rounded_rect(draw, (c1_x1 + 50, pb_y + 40, c1_x1 + 50 + ram_w, pb_y + 68), radius=14, fill=(249, 115, 22))
 
-    draw.text((c2_x1 + 45, pb_y), "NETWORK HEALTH (PING)", fill=(148, 163, 184), font=load_font(22, bold=True))
-    draw_rounded_rect(draw, (c2_x1 + 45, pb_y + 35, c2_x2 - 45, pb_y + 55), radius=10, fill=(30, 41, 59))
+    # Progress PING
+    draw_signal_icon(draw, c2_x1 + 50, pb_y - 5, color=(74, 222, 128))
+    draw.text((c2_x1 + 88, pb_y), "NETWORK HEALTH (PING)", fill=(148, 163, 184), font=load_font(24, bold=True))
+    draw_rounded_rect(draw, (c2_x1 + 50, pb_y + 40, c2_x2 - 50, pb_y + 68), radius=14, fill=(30, 41, 59))
     ping_ratio = max(0.1, 1.0 - min(ping_ms / 1000, 0.9))
-    ping_fill_w = int((card_w - 90) * ping_ratio)
-    draw_rounded_rect(draw, (c2_x1 + 45, pb_y + 35, c2_x1 + 45 + ping_fill_w, pb_y + 55), radius=10, fill=(34, 197, 94))
+    ping_w = int((card_w - 100) * ping_ratio)
+    draw_rounded_rect(draw, (c2_x1 + 50, pb_y + 40, c2_x1 + 50 + ping_w, pb_y + 68), radius=14, fill=(34, 197, 94))
 
-    # Footer Branding
+    # Footer
     draw.text(
-        (W // 2, H - pad_y - 45),
-        "Railway Cloud Deployment • Ultra-High Definition Engine Dashboard",
+        (W // 2, H - pad_y - 50),
+        "Railway Cloud High-Speed Worker • Multi-Threaded Engine v3.0 • Developed by An",
         fill=(100, 116, 139),
         font=font_foot,
         anchor="mm",
@@ -330,7 +417,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
-    buf.name = "server_status.png"
+    buf.name = "status_ultra_hd.png"
     return buf
 
 
@@ -428,7 +515,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-# ================= TẢI AUDIO BYPASS BẢN QUYỀN & SOUNDCLOUD FALLBACK =================
+# ================= TẢI AUDIO & FALLBACK SOUNDCLOUD =================
 def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[io.BytesIO | None, dict]:
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     tmp_dir = tempfile.gettempdir()
@@ -497,7 +584,7 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
         except Exception as err:
             logger.warning(f"Lỗi tải với clients {clients}: {err}")
 
-    # Fallback sang SoundCloud nếu bài hát bị YouTube khóa DRM
+    # Fallback sang SoundCloud
     if search_query:
         logger.info(f"Kích hoạt SoundCloud fallback: {search_query}")
         sc_template = os.path.join(tmp_dir, f"sc_{video_id}_%(id)s.%(ext)s")
@@ -861,7 +948,7 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         else estimate_fb_creation_details(uid)
     )
 
-    badge = "💎 ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
+    badge = f"{EMOJI_DIAMOND} ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else f"{EMOJI_CHECK} HOẠT ĐỘNG BÌNH THƯỜNG"
     avatar_url = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
 
     social_lines = []
@@ -881,7 +968,7 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     social_display = "\n".join(social_lines) if social_lines else "<i>Không có mạng xã hội liên kết ngoài</i>"
 
     panel = (
-        f"<tg-emoji emoji-id=\"5465465476576576576\">⚡</tg-emoji> <b>HỒ SƠ FACEBOOK PRO CHI TIẾT</b>\n"
+        f"{EMOJI_FIRE} <b>HỒ SƠ FACEBOOK PRO CHI TIẾT</b> {EMOJI_LIGHTNING}\n"
         f"<code>────────────────────────────</code>\n"
         f"👤 <b>Họ tên:</b> <b>{name}</b>\n"
         f"🆔 <b>Mã UID:</b> <code>{uid}</code>\n"
@@ -902,7 +989,7 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         f"🌐 <b>MẠNG XÃ HỘI GẮN KÈM:</b>\n"
         f"{social_display}\n"
         f"<code>────────────────────────────</code>\n"
-        f"🔗 <b>Liên kết trực tiếp:</b> <a href='https://facebook.com/{uid}'>fb.com/{uid}</a>"
+        f"🔗 <b>Liên kết:</b> <a href='https://facebook.com/{uid}'>fb.com/{uid}</a>"
     )
     return truncate_text(panel, 1020), avatar_url
 
@@ -1029,7 +1116,7 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
         err = data.get("error", "Người dùng không tồn tại hoặc API bận.")
         return (
             f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-            f"❌ <b>TRA CỨU THẤT BẠI:</b> <code>@{clean_user}</code>\n"
+            f"{EMOJI_CROSS} <b>TRA CỨU THẤT BẠI:</b> <code>@{clean_user}</code>\n"
             f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
             f"⚠️ <b>Chi tiết:</b> <i>{html.escape(str(err))}</i>\n"
             f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
@@ -1044,13 +1131,13 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     uid = str(u.get("id") or u.get("uid") or "0")
 
     is_private = u.get("privateAccount") or u.get("is_private") or False
-    status_str = "🔒 Riêng tư" if is_private else "🌐 Công khai"
+    status_str = "🔒 Riêng tư" if is_private else f"{EMOJI_GLOBE} Công khai"
     is_verified = u.get("verified") or u.get("customVerify") or False
-    verified_str = "✅ Đã xác minh" if is_verified else "❌ Chưa xác minh"
+    verified_str = f"{EMOJI_CHECK} Đã xác minh" if is_verified else f"{EMOJI_CROSS} Chưa xác minh"
     language = html.escape(str(u.get("language") or u.get("region") or "vi").lower())
     bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
     has_shop = u.get("commerceUserInfo", {}).get("commerceUser") or u.get("is_star") or False
-    shop_str = "✅ Có" if has_shop else "❌ Không"
+    shop_str = f"{EMOJI_CHECK} Có" if has_shop else f"{EMOJI_CROSS} Không"
 
     followers = s.get("followerCount") or s.get("followers") or 0
     following = s.get("followingCount") or s.get("following") or 0
@@ -1062,7 +1149,7 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
 
     panel = (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"ℹ️ <tg-emoji emoji-id=\"5368324170671202286\">📊</tg-emoji> Thông Tin TikTok @{unique_id} ⚡\n"
+        f"ℹ️ {EMOJI_SEARCH} <b>Thông Tin TikTok</b> @{unique_id} {EMOJI_LIGHTNING}\n"
         f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
         f"👤 Tên: <b>{nickname}</b>\n"
         f"🆔 ID: <code>{uid}</code>\n"
@@ -1076,7 +1163,7 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
         f"   ├ 👥 Follower:   <code>{followers:,}</code>\n"
         f"   ├ 👤 Following:  <code>{following:,}</code>\n"
         f"   ├ 🎥 Video:      <code>{videos:,}</code>\n"
-        f"   └ ❤️ Lượt thích: <code>{hearts:,}</code>\n"
+        f"   └ {EMOJI_HEART} Lượt thích: <code>{hearts:,}</code>\n"
         f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
         f"⏰ Ngày tạo: <code>{created_time_str}</code>\n"
         f"🔗 Link: <a href='https://www.tiktok.com/@{unique_id}'>TikTok Profile</a>\n"
@@ -1090,18 +1177,18 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
 def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboardMarkup]:
     display_name = html.escape(user_name)
     panel = (
-        f"<tg-emoji emoji-id=\"5465465476576576576\">⚡</tg-emoji> <b>TIKTOK & FACEBOOK & YOUTUBE TOOLKIT</b> <tg-emoji emoji-id=\"5465465476576576576\">⚡</tg-emoji>\n"
+        f"{EMOJI_FIRE} <b>TIKTOK & FACEBOOK & YOUTUBE TOOLKIT PRO</b> {EMOJI_LIGHTNING}\n"
         f"<code>────────────────────────────</code>\n"
         f"👋 Xin chào, <b>{display_name}</b>\n"
-        f"Hệ thống đa năng: Tải Media HD, Nghe nhạc YouTube & Tra cứu Profile.\n\n"
+        f"Hệ thống đa năng: Tải Media HD, Nghe nhạc YouTube & Tra cứu Profile OSINT.\n\n"
         f"📌 <b>LỆNH TRUY CẬP NHANH:</b>\n"
-        f"• <tg-emoji emoji-id=\"5427009714745517332\">🎶</tg-emoji> <b>Nhạc YouTube:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
-        f"• <tg-emoji emoji-id=\"5472164874889707833\">📥</tg-emoji> <b>Tải TikTok:</b> Gửi trực tiếp link (Auto Full HD)\n"
-        f"• <tg-emoji emoji-id=\"5368324170671202286\">🎵</tg-emoji> <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
-        f"• <tg-emoji emoji-id=\"5465465476576576576\">🔎</tg-emoji> <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
-        f"• <tg-emoji emoji-id=\"5427009714745517332\">🔵</tg-emoji> <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
+        f"• {EMOJI_MUSIC} <b>Nhạc YouTube:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
+        f"• {EMOJI_DOWNLOAD} <b>Tải TikTok:</b> Gửi trực tiếp link (Auto 1080p Không Logo)\n"
+        f"• {EMOJI_AUDIO} <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
+        f"• {EMOJI_SEARCH} <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
+        f"• {EMOJI_DIAMOND} <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"<tg-emoji emoji-id=\"5427009714745517332\">🟢</tg-emoji> <b>Status:</b> <i>Railway Container Engine Online</i>"
+        f"{EMOJI_CHECK} <b>Status:</b> <i>Railway Cloud Container Engine Online</i>"
     )
 
     keyboard = [
@@ -1170,11 +1257,11 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_sing":
         text = (
-            "<tg-emoji emoji-id=\"5427009714745517332\">🎶</tg-emoji> <b>HƯỚNG DẪN TÌM VÀ TẢI NHẠC YOUTUBE</b>\n"
-            "<code>────────────────────────────</code>\n"
-            "• Cú pháp: <code>/sing &lt;tên bài hát hoặc từ khóa&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/sing tắt đèn đi</code>\n"
-            "• Bot sẽ trả về danh sách, bấm số bài hát để nhận file Audio."
+            f"{EMOJI_MUSIC} <b>HƯỚNG DẪN TÌM VÀ TẢI NHẠC YOUTUBE</b>\n"
+            f"<code>────────────────────────────</code>\n"
+            f"• Cú pháp: <code>/sing &lt;tên bài hát hoặc từ khóa&gt;</code>\n"
+            f"• <i>Ví dụ:</i> <code>/sing tắt đèn đi</code>\n"
+            f"• Bot trả về kết quả kèm các nút tải nhanh định dạng âm thanh chuẩn cao."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1183,11 +1270,11 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_down":
         text = (
-            "<tg-emoji emoji-id=\"5472164874889707833\">📥</tg-emoji> <b>HƯỚNG DẪN TẢI TIKTOK FULL HD</b>\n"
-            "<code>────────────────────────────</code>\n"
-            "• Gửi link video hoặc album ảnh trực tiếp vào chat.\n"
-            "• Bot tự động tải file <b>HD / 1080p không logo</b>.\n"
-            "• Tương thích cả link ngắn như <code>vt.tiktok.com</code>."
+            f"{EMOJI_DOWNLOAD} <b>HƯỚNG DẪN TẢI TIKTOK FULL HD</b>\n"
+            f"<code>────────────────────────────</code>\n"
+            f"• Gửi link video hoặc album ảnh trực tiếp vào chat.\n"
+            f"• Bot tự động tải file <b>HD / 1080p không dính logo watermark</b>.\n"
+            f"• Hỗ trợ toàn bộ link rút gọn <code>vt.tiktok.com</code>."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1196,10 +1283,10 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_music":
         text = (
-            "<tg-emoji emoji-id=\"5368324170671202286\">🎵</tg-emoji> <b>TRÍCH XUẤT AUDIO TIKTOK</b>\n"
-            "<code>────────────────────────────</code>\n"
-            "• Cú pháp: <code>/music &lt;link_tiktok&gt;</code>\n"
-            "• Hoặc bấm nút <b>[Tải nhạc MP3]</b> bên dưới mỗi video tải về."
+            f"{EMOJI_AUDIO} <b>TRÍCH XUẤT AUDIO TIKTOK</b>\n"
+            f"<code>────────────────────────────</code>\n"
+            f"• Cú pháp: <code>/music &lt;link_tiktok&gt;</code>\n"
+            f"• Hoặc bấm nút <b>[Tải nhạc MP3]</b> đính kèm dưới mỗi video TikTok."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1208,10 +1295,10 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_info":
         text = (
-            "<tg-emoji emoji-id=\"5465465476576576576\">🔎</tg-emoji> <b>TRA CỨU TIKTOK PROFILE</b>\n"
-            "<code>────────────────────────────</code>\n"
-            "• Cú pháp: <code>/getinfo &lt;username&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/getinfo tiktok</code>"
+            f"{EMOJI_SEARCH} <b>TRA CỨU TIKTOK PROFILE</b>\n"
+            f"<code>────────────────────────────</code>\n"
+            f"• Cú pháp: <code>/getinfo &lt;username&gt;</code>\n"
+            f"• <i>Ví dụ:</i> <code>/getinfo tiktok</code>"
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1220,10 +1307,10 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_fb":
         text = (
-            "<tg-emoji emoji-id=\"5427009714745517332\">🔵</tg-emoji> <b>TRA CỨU FACEBOOK PROFILE PRO</b>\n"
-            "<code>────────────────────────────</code>\n"
-            "• Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc link tài khoản bất kỳ."
+            f"{EMOJI_DIAMOND} <b>TRA CỨU FACEBOOK PROFILE PRO</b>\n"
+            f"<code>────────────────────────────</code>\n"
+            f"• Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
+            f"• <i>Ví dụ:</i> <code>/fb 4</code> hoặc đường dẫn trang cá nhân bất kỳ."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1231,17 +1318,17 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_status":
-        await query.answer("✨ Đang trích xuất dữ liệu & render Canvas...", show_alert=False)
+        await query.answer("✨ Đang trích xuất chỉ số & Render Canvas 4K...", show_alert=False)
         canvas_buffer = await generate_system_status_canvas()
 
         caption_text = (
-            "<tg-emoji emoji-id=\"5368324170671202286\">📊</tg-emoji> <b>HỆ THỐNG GIÁM SÁT MÁY CHỦ REAL-TIME</b>\n"
-            "<code>────────────────────────────</code>\n"
-            "<tg-emoji emoji-id=\"5465465476576576576\">⚡</tg-emoji> <b>Trạng thái:</b> <code>ONLINE (Optimal)</code>\n"
-            "<tg-emoji emoji-id=\"5427009714745517332\">🟢</tg-emoji> <b>Môi trường:</b> <i>Railway Cloud Container</i>\n"
-            "<tg-emoji emoji-id=\"5472164874889707833\">🛡</tg-emoji> <b>Bảo vệ DRM:</b> <i>Bypass Core Active</i>\n"
-            "<code>────────────────────────────</code>\n"
-            "<i>💡 Đồ họa được render trực tiếp 2000px Retina siêu nét.</i>"
+            f"{EMOJI_STATUS} <b>HỆ THỐNG GIÁM SÁT MÁY CHỦ REALTIME</b> {EMOJI_LIGHTNING}\n"
+            f"<code>────────────────────────────</code>\n"
+            f"{EMOJI_FIRE} <b>Hiệu năng:</b> <code>ULTRA HIGH SPEED</code>\n"
+            f"{EMOJI_CHECK} <b>Môi trường:</b> <i>Railway Cloud Container</i>\n"
+            f"{EMOJI_DIAMOND} <b>Bypass Engine:</b> <i>DRM Unpack Online</i>\n"
+            f"<code>────────────────────────────</code>\n"
+            f"<i>💡 Bản đồ thông số kết xuất với Canvas Ultra HD 4K sắc mịn.</i>"
         )
 
         try:
@@ -1250,7 +1337,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
                 reply_markup=InlineKeyboardMarkup(back_btn),
             )
         except Exception as e:
-            logger.error(f"Lỗi edit canvas media: {e}")
+            logger.error(f"Lỗi edit canvas: {e}")
             await query.message.reply_photo(
                 photo=canvas_buffer,
                 caption=caption_text,
@@ -1278,18 +1365,17 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyword = " ".join(context.args).strip()
-    status_msg = await update.message.reply_text(f"🔍 <i>Đang tìm kiếm:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
+    status_msg = await update.message.reply_text(f"{EMOJI_SEARCH} <i>Đang tìm kiếm:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
 
     results = await search_youtube_fast(keyword, 6)
 
     if not results:
-        await status_msg.edit_text("❌ Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!")
+        await status_msg.edit_text(f"{EMOJI_CROSS} Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!")
         return
 
-    # Lưu từ khóa vào context để fallback sang SoundCloud nếu cần
     context.bot_data[f"kw_{update.effective_chat.id}"] = keyword
 
-    msg_lines = [f"<tg-emoji emoji-id=\"5427009714745517332\">🎶</tg-emoji> <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
+    msg_lines = [f"{EMOJI_MUSIC} <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
     keyboard = []
     row = []
 
@@ -1308,7 +1394,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if row:
         keyboard.append(row)
 
-    msg_lines.append("<code>────────────────────────────</code>\n👉 <i>Bấm số bài hát để tải âm thanh:</i>")
+    msg_lines.append("<code>────────────────────────────</code>\n👉 <i>Bấm số bài hát tương ứng để tải:</i>")
     text_content = "\n".join(msg_lines)
 
     await status_msg.delete()
@@ -1330,7 +1416,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= CALLBACK TẢI AUDIO YOUTUBE =================
 async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("⏳ Đang tải audio...", show_alert=False)
+    await query.answer("⏳ Đang giải mã và bóc tách stream...", show_alert=False)
     data = query.data
 
     vid_id = data.replace("ytdl_", "")
@@ -1338,7 +1424,7 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
 
     saved_kw = context.bot_data.get(f"kw_{query.message.chat_id}", "")
 
-    loading_msg = await query.message.reply_text("⏳ <i>Đang bóc tách audio và mở khóa bản quyền...</i>", parse_mode=ParseMode.HTML)
+    loading_msg = await query.message.reply_text(f"{EMOJI_LIGHTNING} <i>Đang mở khóa bản quyền và tải âm thanh gốc...</i>", parse_mode=ParseMode.HTML)
 
     loop = asyncio.get_running_loop()
     stream_file, details = await loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw)
@@ -1346,14 +1432,14 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
     await loading_msg.delete()
 
     if not stream_file:
-        await query.message.reply_text("❌ Không thể tải được bài hát này. Hãy thử chọn bài số khác trong danh sách!")
+        await query.message.reply_text(f"{EMOJI_CROSS} Không thể tải được bài hát này. Hãy thử chọn bài khác trong danh sách!")
         return
 
     title = html.escape(details.get("title", "YouTube Track"))
     uploader = html.escape(details.get("uploader", "YouTube Artist"))
 
     caption = (
-        f"╔══════════ <tg-emoji emoji-id=\"5427009714745517332\">🎶</tg-emoji> <b>AUDIO TRACK</b> ══════════╗\n"
+        f"╔══════════ {EMOJI_MUSIC} <b>AUDIO TRACK PRO</b> ══════════╗\n"
         f"║ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
         f"║ 👤 <b>Nghệ sĩ/Kênh:</b> {uploader}\n"
         f"║ 🔗 <b>Nguồn gốc:</b> <a href='{target_url}'>Media Source</a>\n"
@@ -1370,7 +1456,7 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
         )
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
-        await query.message.reply_text("❌ Kích thước tệp âm thanh vượt quá giới hạn truyền tải của bot.")
+        await query.message.reply_text(f"{EMOJI_CROSS} Kích thước tệp âm thanh vượt quá giới hạn truyền tải Telegram.")
 
 
 # LỆNH /fb
@@ -1396,14 +1482,14 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = await get_fb_id(input_data)
     if not uid:
-        await status_msg.edit_text("❌ Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text(f"{EMOJI_CROSS} Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!", parse_mode=ParseMode.HTML)
         return
 
-    await status_msg.edit_text(f"📡 <i>Đang quét dữ liệu OSINT cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
+    await status_msg.edit_text(f"{EMOJI_SEARCH} <i>Đang truy quét OSINT cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
     data = await fetch_fb_info(uid)
 
     if not data:
-        await status_msg.edit_text("❌ Không lấy được thông tin từ profile này.", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text(f"{EMOJI_CROSS} Không lấy được thông tin từ profile này.", parse_mode=ParseMode.HTML)
         return
 
     report, avatar_url = format_fb_info_panel(data)
@@ -1432,7 +1518,7 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
         api_res = await fallback_tik_download(tik_url)
 
     if not api_res or api_res.get("code") != 0 or not api_res.get("data"):
-        await query.message.reply_text("❌ Không lấy được audio từ video này.")
+        await query.message.reply_text(f"{EMOJI_CROSS} Không lấy được audio từ video này.")
         return
 
     res = api_res["data"]
@@ -1440,14 +1526,14 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
     music_url = ensure_full_url(raw_music)
 
     if not music_url:
-        await query.message.reply_text("❌ Video này bị tắt tiếng hoặc không có track âm thanh riêng.")
+        await query.message.reply_text(f"{EMOJI_CROSS} Video này bị tắt tiếng hoặc không có track âm thanh riêng.")
         return
 
     music_title = html.escape(res.get("music_info", {}).get("title") or "TikTok Audio")
     music_author = html.escape(res.get("music_info", {}).get("author") or "Original Sound")
 
     audio_panel = (
-        f"╔══════════ <tg-emoji emoji-id=\"5368324170671202286\">🎵</tg-emoji> <b>TIKTOK AUDIO PLAYER</b> ══════════╗\n"
+        f"╔══════════ {EMOJI_AUDIO} <b>TIKTOK AUDIO PLAYER</b> ══════════╗\n"
         f"║ 🎼 <b>Bài hát:</b> <b>{music_title}</b>\n"
         f"║ 👤 <b>Nghệ sĩ:</b> {music_author}\n"
         f"║ 🆔 <b>Source ID:</b> <code>{video_id}</code>\n"
@@ -1477,7 +1563,7 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
             )
     except Exception as e:
         logger.error(f"Lỗi gửi audio callback: {e}")
-        await query.message.reply_text("❌ Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.")
+        await query.message.reply_text(f"{EMOJI_CROSS} Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.")
 
 
 # Lệnh /music
@@ -1503,7 +1589,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Vui lòng cung cấp link TikTok hợp lệ.", parse_mode=ParseMode.HTML)
         return
 
-    msg = await update.message.reply_text("⏳ <i>Đang bóc tách file âm thanh gốc...</i>", parse_mode=ParseMode.HTML)
+    msg = await update.message.reply_text(f"{EMOJI_LIGHTNING} <i>Đang bóc tách file âm thanh gốc...</i>", parse_mode=ParseMode.HTML)
 
     target_url = await resolve_tiktok_url(raw_url)
     data = await tikwm_req({"url": target_url, "hd": 1})
@@ -1511,7 +1597,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = await fallback_tik_download(target_url)
 
     if not data or data.get("code") != 0 or not data.get("data"):
-        await msg.edit_text("❌ <b>Không trích xuất được:</b> Video riêng tư, bị xoá hoặc link không hợp lệ.")
+        await msg.edit_text(f"{EMOJI_CROSS} <b>Không trích xuất được:</b> Video riêng tư, bị xoá hoặc link không hợp lệ.")
         return
 
     res = data["data"]
@@ -1519,14 +1605,14 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     music_url = ensure_full_url(raw_music)
 
     if not music_url:
-        await msg.edit_text("❌ Video này không có âm thanh hoặc bị tắt tiếng do bản quyền.")
+        await msg.edit_text(f"{EMOJI_CROSS} Video này không có âm thanh hoặc bị tắt tiếng do bản quyền.")
         return
 
     music_title = html.escape(res.get("music_info", {}).get("title") or "TikTok Audio")
     music_author = html.escape(res.get("music_info", {}).get("author") or "Original Sound")
 
     audio_panel = (
-        f"╔══════════ <tg-emoji emoji-id=\"5368324170671202286\">🎵</tg-emoji> <b>TIKTOK AUDIO EXTRACTED</b> ══════════╗\n"
+        f"╔══════════ {EMOJI_AUDIO} <b>TIKTOK AUDIO EXTRACTED</b> ══════════╗\n"
         f"║ 🎼 <b>Track:</b> <b>{music_title}</b>\n"
         f"║ 👤 <b>Artist:</b> {music_author}\n"
         f"║ ⚡ <b>Format:</b> High Quality MP3 Audio\n"
@@ -1557,7 +1643,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
-        await update.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
+        await update.message.reply_text(f"{EMOJI_CROSS} Lỗi gửi file audio lên Telegram.")
 
 
 # Lệnh /getinfo
@@ -1580,7 +1666,7 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].strip().lstrip("@")
     status_msg = await update.message.reply_text(
-        f"<tg-emoji emoji-id=\"5465465476576576576\">⚡</tg-emoji> <i>Đang quét dữ liệu người dùng</i> <code>@{html.escape(username)}</code>...",
+        f"{EMOJI_SEARCH} <i>Đang quét dữ liệu người dùng</i> <code>@{html.escape(username)}</code>...",
         parse_mode=ParseMode.HTML,
     )
 
@@ -1608,16 +1694,16 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         raw_url = match.group(0)
 
-        msg = await update.message.reply_text("⏳ <i>Đang tải dữ liệu HD...</i>", parse_mode=ParseMode.HTML)
+        msg = await update.message.reply_text(f"{EMOJI_LIGHTNING} <i>Đang tải dữ liệu HD 1080p...</i>", parse_mode=ParseMode.HTML)
 
         target_url = await resolve_tiktok_url(raw_url)
         data = await tikwm_req({"url": target_url, "hd": 1})
         if not data or data.get("code") != 0:
-            logger.warning("TikWM không phản hồi hoặc lỗi, dùng fallback LoveTik...")
+            logger.warning("TikWM không phản hồi, thử LoveTik fallback...")
             data = await fallback_tik_download(target_url)
 
         if not data or data.get("code") != 0 or not data.get("data"):
-            await msg.edit_text("❌ <b>Tải thất bại:</b> Video đã bị xóa, tài khoản riêng tư hoặc link không đúng.")
+            await msg.edit_text(f"{EMOJI_CROSS} <b>Tải thất bại:</b> Video đã bị xóa, tài khoản riêng tư hoặc link không đúng.")
             return
 
         res = data["data"]
@@ -1627,7 +1713,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         music_title = html.escape(res.get("music_info", {}).get("title") or "Original Sound")
 
         caption = (
-            f"╔══════════ <tg-emoji emoji-id=\"5472164874889707833\">🎬</tg-emoji> <b>TIKTOK HD DOWNLOAD</b> ══════════╗\n"
+            f"╔══════════ {EMOJI_DOWNLOAD} <b>TIKTOK HD DOWNLOAD</b> ══════════╗\n"
             f"║ 📝 <b>Tiêu đề:</b> {title}\n"
             f"║ 👤 <b>Tác giả:</b> {author}\n"
             f"║ 🎵 <b>Âm thanh:</b> <i>{music_title}</i>\n"
@@ -1664,7 +1750,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         video_url = ensure_full_url(raw_video_url)
 
         if not video_url:
-            await msg.edit_text("❌ Không trích xuất được link video chất lượng cao.")
+            await msg.edit_text(f"{EMOJI_CROSS} Không trích xuất được link video chất lượng cao.")
             return
 
         stream_video = await download_file_stream(video_url, max_size_mb=50)
@@ -1692,7 +1778,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
         except Exception as e:
             logger.error(f"Lỗi gửi video: {e}")
-            await update.message.reply_text("❌ Video vượt quá 50MB hoặc Telegram CDN timeout.")
+            await update.message.reply_text(f"{EMOJI_CROSS} Video vượt quá 50MB hoặc Telegram CDN timeout.")
 
 
 # ================= KHỞI CHẠY BOT =================
@@ -1702,7 +1788,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: YouTube Music + Canvas Server Status + TT  ║\n"
+        "║ Features: YouTube Music + Canvas 4K Status + TikTok  ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
