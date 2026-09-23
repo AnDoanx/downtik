@@ -12,6 +12,7 @@ import logging
 import os
 import platform
 import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -69,14 +70,6 @@ if YT_COOKIES_ENV:
         logging.warning(f"Không thể tạo file cookie: {e}")
 
 ANIME_MAX_ITEMS = 6
-
-# Danh sách domain phát video Gogoanime trực tiếp
-GOGO_MIRRORS = [
-    "https://anitaku.to",
-    "https://gogoanime3.co",
-    "https://gogoanime.pe",
-    "https://gogoanime.cl",
-]
 
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
@@ -214,7 +207,6 @@ async def ani_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
                     for m in media_list:
                         titles = m.get("title", {})
                         title = titles.get("english") or titles.get("romaji") or titles.get("native")
-                        # Chuẩn hóa slug tương thích với các host video
                         raw_slug_base = titles.get("english") or titles.get("romaji") or "anime"
                         slug = re.sub(r"[^\w\s-]", "", raw_slug_base.lower()).strip()
                         slug = re.sub(r"[-\s]+", "-", slug)
@@ -228,7 +220,7 @@ async def ani_search(session: aiohttp.ClientSession, query: str) -> list[dict]:
     except Exception as e:
         logger.warning(f"AniList API error: {e}")
 
-    # Fallback Kitsu API
+    # Fallback Kitsu
     try:
         kitsu_url = f"https://kitsu.io/api/edge/anime?filter[text]={urllib.parse.quote_plus(query)}&page[limit]=6"
         async with session.get(kitsu_url, timeout=aiohttp.ClientTimeout(total=8)) as r:
@@ -270,25 +262,71 @@ async def ani_episodes(session: aiohttp.ClientSession, slug: str, total_eps: int
     return eps
 
 
-# ================= NATIVE STREAM EXTRACTOR QUA YT-DLP =================
-def download_anime_via_ytdlp(slug: str, ep_num: str) -> str | None:
-    """Tự động tìm kiếm player embed của tập phim và tải trực tiếp bằng yt-dlp."""
+# ================= BỘ BÓC TÁCH STREAM & NÉN VIDEO DƯỚI 50MB =================
+def compress_video_ffmpeg(input_path: str, output_path: str) -> bool:
+    """Nén video về độ phân giải 480p/bitrate thấp để chắc chắn dưới 48MB."""
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-vf", "scale=-2:480",
+            "-c:v", "libx264",
+            "-crf", "30",
+            "-preset", "faster",
+            "-c:a", "aac",
+            "-b:a", "64k",
+            "-fs", "47M",
+            output_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
+        return res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+    except Exception as e:
+        logger.error(f"FFmpeg compress error: {e}")
+        return False
+
+
+def download_anime_smart(slug: str, ep_num: str) -> tuple[str | None, str | None]:
+    """
+    Tải anime và tự động nén nếu file > 48MB.
+    Trả về: (file_path_để_gửi_telegram, link_xem_trực_tiếp_nếu_có)
+    """
     tmp_dir = tempfile.gettempdir()
     ts = int(time.time())
     job = uuid.uuid4().hex[:6]
     clean_slug = re.sub(r"[^\w\-]", "_", slug)[:25]
-    out_path = os.path.join(tmp_dir, f"ani_{clean_slug}_e{ep_num}_{ts}_{job}.mp4")
+    raw_out = os.path.join(tmp_dir, f"ani_raw_{clean_slug}_e{ep_num}_{ts}_{job}.mp4")
+    comp_out = os.path.join(tmp_dir, f"ani_comp_{clean_slug}_e{ep_num}_{ts}_{job}.mp4")
 
-    # Danh sách các link xem trực tiếp cần thử qua yt-dlp
-    target_urls = []
-    for mirror in GOGO_MIRRORS:
-        target_urls.append(f"{mirror}/{slug}-episode-{ep_num}")
-        # Biến thể định dạng slug không dấu gạch nối cuối
-        target_urls.append(f"{mirror}/{slug.replace('-tv', '')}-episode-{ep_num}")
+    # Danh sách URL từ các host anime lớn
+    sources = [
+        f"https://anitaku.to/{slug}-episode-{ep_num}",
+        f"https://gogoanime3.co/{slug}-episode-{ep_num}",
+        f"https://gogoanime.pe/{slug}-episode-{ep_num}",
+        f"https://anitaku.to/{slug.replace('-tv', '')}-episode-{ep_num}",
+        f"https://gogoanime3.co/{slug.replace('-tv', '')}-episode-{ep_num}",
+    ]
 
-    ydl_opts = {
-        "format": "best[ext=mp4][filesize<50M]/bestvideo[filesize<40M]+bestaudio/best[filesize<50M]/best",
-        "outtmpl": out_path,
+    direct_url = None
+
+    # 1. Trích xuất URL trực tiếp bằng yt-dlp
+    ydl_info_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "nocheckcertificate": True,
+    }
+    for src in sources:
+        try:
+            with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
+                info = ydl.extract_info(src, download=False)
+                if info:
+                    direct_url = info.get("url") or src
+                    break
+        except Exception:
+            continue
+
+    # 2. Tải bản dung lượng thấp (360p/480p) ưu tiên trước để không vượt 50MB
+    ydl_dl_opts = {
+        "format": "best[height<=480][ext=mp4]/best[height<=720][ext=mp4]/best",
+        "outtmpl": raw_out,
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
@@ -297,21 +335,41 @@ def download_anime_via_ytdlp(slug: str, ep_num: str) -> str | None:
         },
     }
 
-    for url in target_urls:
+    downloaded = False
+    for src in sources:
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-                if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-                    return out_path
+            with yt_dlp.YoutubeDL(ydl_dl_opts) as ydl:
+                ydl.download([src])
+                if os.path.exists(raw_out) and os.path.getsize(raw_out) > 0:
+                    downloaded = True
+                    break
         except Exception:
             continue
 
-    return None
+    if not downloaded or not os.path.exists(raw_out):
+        return None, direct_url
+
+    # 3. Kiểm tra dung lượng file
+    file_size_mb = os.path.getsize(raw_out) / (1024 * 1024)
+    if file_size_mb <= 48.0:
+        return raw_out, direct_url
+
+    # 4. Nếu file > 48MB, kích hoạt nén tự động bằng ffmpeg
+    success = compress_video_ffmpeg(raw_out, comp_out)
+    try:
+        os.remove(raw_out)
+    except OSError:
+        pass
+
+    if success and os.path.exists(comp_out):
+        return comp_out, direct_url
+
+    return None, direct_url
 
 
-async def ani_download(slug: str, ep_num: str) -> str | None:
+async def ani_download(slug: str, ep_num: str) -> tuple[str | None, str | None]:
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, download_anime_via_ytdlp, slug, ep_num)
+    return await loop.run_in_executor(None, download_anime_smart, slug, ep_num)
 
 
 # ================= VẼ CANVAS DASHBOARD (STATUS ẢNH) =================
@@ -407,7 +465,7 @@ async def generate_system_status_canvas() -> io.BytesIO:
     right_data = [
         ("RAM sử dụng:", f"{ram_mb} MB", (255, 183, 77)),
         ("TikWM Engine:", "ONLINE (HD Ready)", (100, 181, 246)),
-        ("Anime Engine:", "yt-dlp Native Extractor", (100, 181, 246)),
+        ("Anime Engine:", "Smart Compress (<50MB)", (100, 181, 246)),
         ("YouTube Core:", "Android/TV Client", (100, 181, 246)),
         ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (100, 181, 246)),
         ("Host Platform:", "Railway Cloud Container", (255, 183, 77)),
@@ -1246,7 +1304,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/anime &lt;tên anime&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/anime solo leveling</code> hoặc <code>/anime naruto</code>\n"
-            "• Hệ thống tự động bóc tách luồng trực tiếp bằng yt-dlp native."
+            "• Tự động nén thông minh để đảm bảo gửi trót lọt qua Telegram."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1460,7 +1518,7 @@ async def handle_anime_episodes_callback(update: Update, context: ContextTypes.D
         f"<code>────────────────────────────</code>\n"
         f"• Tổng số tập: <b>{len(eps)}</b> tập\n"
         f"• Trang: <b>{page + 1}/{total_pages}</b>\n"
-        f"👉 <i>Bấm chọn tập để tải video HD:</i>"
+        f"👉 <i>Bấm chọn tập để tải video:</i>"
     )
 
     try:
@@ -1477,7 +1535,7 @@ async def handle_anime_download_callback(update: Update, context: ContextTypes.D
     query = update.callback_query
     if not query:
         return
-    await query.answer("⏳ Đang kết nối luồng tải...", show_alert=False)
+    await query.answer("⏳ Đang xử lý luồng tải...", show_alert=False)
 
     parts = query.data.split("_")
     short_id = parts[1]
@@ -1491,44 +1549,64 @@ async def handle_anime_download_callback(update: Update, context: ContextTypes.D
         return
 
     status_msg = await query.message.reply_text(
-        f"⚡ <i>Đang bóc tách & tải Tập {ep_num} qua mirror extractor...</i>", parse_mode=ParseMode.HTML
+        f"⚡ <i>Đang bóc tách & tải Tập {ep_num} (tự động tối ưu dung lượng)...</i>", parse_mode=ParseMode.HTML
     )
 
-    file_path = await ani_download(slug, ep_num)
+    file_path, direct_url = await ani_download(slug, ep_num)
 
-    if not file_path or not os.path.exists(file_path):
-        await status_msg.edit_text("❌ Tập phim vượt quá 50MB (giới hạn bot Telegram) hoặc server nguồn đang quá tải.")
-        return
+    extra_keyboard = []
+    if direct_url:
+        extra_keyboard.append([InlineKeyboardButton("🌐 Xem Trực Tiếp / Tải Full HD", url=direct_url)])
+    reply_markup = InlineKeyboardMarkup(extra_keyboard) if extra_keyboard else None
 
     caption = (
         f"╔══════════ 🎬 <b>ANIME DOWNLOAD</b> ══════════╗\n"
         f"║ 🎥 <b>Bộ phim:</b> <b>{html.escape(anime_name)}</b>\n"
         f"║ 🎞️ <b>Tập:</b> {ep_num}\n"
-        f"║ ⚡ <b>Chất lượng:</b> Full HD 720p/1080p\n"
+        f"║ ⚡ <b>Trạng thái:</b> Đã xử lý tương thích Telegram\n"
         f"╚════════════════════════════════════╝"
     )
 
-    await status_msg.edit_text("📤 <i>Đang gửi video lên Telegram...</i>", parse_mode=ParseMode.HTML)
-
-    try:
-        with open(file_path, "rb") as vf:
-            await query.message.reply_video(
-                video=vf,
-                caption=truncate_text(caption, 1020),
-                parse_mode=ParseMode.HTML,
-                read_timeout=240,
-                write_timeout=240,
+    # Nếu tải và nén thành công dưới 50MB
+    if file_path and os.path.exists(file_path):
+        await status_msg.edit_text("📤 <i>Đang gửi video lên Telegram...</i>", parse_mode=ParseMode.HTML)
+        try:
+            with open(file_path, "rb") as vf:
+                await query.message.reply_video(
+                    video=vf,
+                    caption=truncate_text(caption, 1020),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup,
+                    read_timeout=300,
+                    write_timeout=300,
+                )
+            await status_msg.delete()
+        except Exception as e:
+            logger.error(f"Lỗi gửi anime video: {e}")
+            fallback_text = (
+                f"{caption}\n\n"
+                f"⚠️ <b>Lưu ý:</b> File vượt quá hạn mức Bot API của Telegram.\n"
+                f"👉 <i>Bạn có thể bấm nút bên dưới để xem/tải trực tiếp tốc độ cao:</i>"
             )
-        await status_msg.delete()
-    except Exception as e:
-        logger.error(f"Lỗi gửi anime video: {e}")
-        await status_msg.edit_text("❌ Video vượt quá 50MB (giới hạn Telegram Bot) hoặc CDN timeout.")
-    finally:
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except OSError:
-                pass
+            await status_msg.edit_text(fallback_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        finally:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except OSError:
+                    pass
+    else:
+        # Nếu server không thể nén hoặc stream bị chặn
+        if direct_url:
+            await status_msg.edit_text(
+                f"🎬 <b>{html.escape(anime_name)} - Tập {ep_num}</b>\n\n"
+                f"⚠️ Video gốc chất lượng cao (~200MB) vượt mức giới hạn gửi trực tiếp của Telegram Bot.\n"
+                f"👉 <b>Bấm link dưới đây để mở xem online hoặc tải về máy:</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
+            )
+        else:
+            await status_msg.edit_text("❌ Không lấy được luồng phát từ máy chủ nguồn. Vui lòng thử lại sau!")
 
 
 # ================= XỬ LÝ LỆNH /sing =================
@@ -2006,7 +2084,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: Anime Native Stream + Music + TT + FB      ║\n"
+        "║ Features: Anime Smart Stream/Compress + YT + TT + FB ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
