@@ -1,10 +1,4 @@
-Dưới đây là bản cập nhật đầy đủ mã nguồn cho bot của bạn với 3 cải tiến chính:
- * Thẻ nhạc Now Playing chuẩn nét Retina (Canvas Hi-Res 2000x760): Áp dụng kỹ thuật vẽ canvas kích thước gấp đôi (supersampling) giống bảng /status, giúp ảnh hiển thị sắc nét, không bị mờ nhòe hay vỡ viền trên Telegram điện thoại lẫn máy tính.
- * Hệ thống cảnh báo thời gian thực về Admin ID 8297032840:
-   * Thông báo ngay cho bạn mỗi khi có ai dùng lệnh bot (/sing, /fb, /getinfo, tải video TikTok, v.v.) kèm tên và User ID.
-   * Tự động cảnh báo đỏ ngay lập tức khi phát hiện bộ nhớ server bị đầy/quá dung lượng.
- * Nâng cấp lệnh /fb bóc tách Người theo dõi (Followers): Tích hợp thêm các bộ lọc bóc tách đa nguồn (Graph API, mbasic regex tiếng Việt & tiếng Anh, định dạng chữ viết tắt K/M) giúp quét chuẩn xác số người theo dõi của tài khoản Facebook.
-Toàn bộ code hoàn chỉnh của file main.py:
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
