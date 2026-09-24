@@ -271,7 +271,7 @@ async def get_crisp_font(size: int, bold: bool = False, session: aiohttp.ClientS
     return ImageFont.load_default()
 
 
-# ================= THẺ NHẠC NOW PLAYING CANVAS CARD (UI 4) =================
+# ================= THẺ NHẠC NOW PLAYING CANVAS CARD =================
 async def generate_music_player_card(title: str, artist: str, duration_sec: int) -> io.BytesIO:
     W, H = 1000, 380
     img = Image.new("RGBA", (W, H), (15, 23, 42, 255))
@@ -1802,7 +1802,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
             )
         else:
-            await update.message.reply_audio(
+            await query.message.reply_audio(
                 audio=music_url,
                 title=music_title,
                 performer=music_author,
