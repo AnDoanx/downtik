@@ -1,8 +1,4 @@
-Dưới đây là bản khôi phục chuẩn xác theo format giao diện cũ ⚡ HỒ SƠ FACEBOOK PRO CHI TIẾT ⚡ kèm đầy đủ các tính năng:
- * Bóc tách chuẩn toàn bộ thông tin (Tên thật, Username, Tích xanh, Giới tính, Quê quán, Nơi sống, Followers, Tiểu sử, Mạng xã hội gắn kèm).
- * Cơ chế giải mã UID và cào dữ liệu tối ưu, không bị treo hay nghẽn luồng.
- * Giữ nguyên hiển thị tốc độ xử lý câu lệnh, múi giờ Việt Nam GMT+7, và gửi cảnh báo về Admin 8297032840.
-Toàn bộ code main.py hoàn chỉnh:
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
