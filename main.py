@@ -144,7 +144,7 @@ async def close_http_session(application: Application = None):
     global HTTP_SESSION
     if HTTP_SESSION and not HTTP_SESSION.closed:
         await HTTP_SESSION.close()
-        logger.info("Đã đóng kết nối aiohttp session.")
+        logger.info("Đã đóng an toàn kết nối aiohttp session.")
 
 
 def truncate_text(text: str, max_len: int = 1000) -> str:
@@ -294,7 +294,7 @@ def get_safe_font(size: int):
     return ImageFont.load_default()
 
 
-# ================= BẢNG CANVAS STATUS (GIỜ VN GMT+7) =================
+# ================= BẢNG CANVAS STATUS CHUẨN NÉT & GIỜ VN =================
 async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, session: aiohttp.ClientSession = None) -> io.BytesIO:
     uptime_sec = int(time.time() - bot_start_time)
     days, remainder = divmod(uptime_sec, 86400)
@@ -1359,7 +1359,7 @@ def format_user_info_panel(data: dict, username: str, elapsed_sec: float = 0.0) 
     return truncate_text(panel, 1020), avatar
 
 
-# ================= HÀM LỆNH /getinfo (FIX LỖI THIẾU HÀM) =================
+# ================= HÀM LỆNH /getinfo =================
 async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not is_authorized(update.effective_user.id):
@@ -1822,7 +1822,7 @@ def main():
         app.job_queue.run_repeating(auto_system_maintenance_job, interval=1800, first=30)
         logger.info("Đã kích hoạt tự động dọn rác nền và cảnh báo Admin 8297032840.")
 
-    # Commands
+    # Đăng ký toàn bộ Command Handlers
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
@@ -1833,12 +1833,12 @@ def main():
     app.add_handler(CommandHandler("downmusic", cmd_music))
     app.add_handler(CommandHandler("fb", cmd_fb))
 
-    # Callbacks
+    # Đăng ký Callback Handlers
     app.add_handler(CallbackQueryHandler(handle_youtube_download_callback, pattern="^ytdl_"))
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
     app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
 
-    # Messages
+    # Đăng ký Message Handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
     app.run_polling()
@@ -1846,4 +1846,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
