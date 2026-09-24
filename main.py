@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -709,7 +708,7 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
     return None, {}
 
 
-# ================= LOGIC FACEBOOK PRO (ĐÃ FIX TÌM UID BẰNG LINK & USERNAME) =================
+# ================= LOGIC FACEBOOK PRO (FIX LẤY THEO LINK & USERNAME) =================
 
 def estimate_fb_creation_details(uid: str) -> str:
     if not uid.isdigit():
@@ -768,21 +767,17 @@ def estimate_fb_creation_details(uid: str) -> str:
 async def get_fb_id(input_str: str) -> str | None:
     clean = input_str.strip()
 
-    # 1. Nhập trực tiếp UID dạng số
     if clean.isdigit():
         return clean
 
-    # 2. Link có chứa param id=1000...
     match_id = re.search(r"[?&]id=(\d+)", clean)
     if match_id:
         return match_id.group(1)
 
-    # 3. Link profile có số sẵn
     direct_match = re.search(r"facebook\.com/(?:profile\.php\?id=)?(\d{6,})", clean)
     if direct_match:
         return direct_match.group(1)
 
-    # Chuẩn hóa link
     target_link = clean
     if not target_link.startswith("http://") and not target_link.startswith("https://"):
         if "facebook.com" in target_link or "fb.com" in target_link:
@@ -899,7 +894,7 @@ async def scrape_fb_full_details(uid: str) -> dict:
             "gender": "male",
             "verified": True,
             "followers": "121451956",
-            "hometown": "Dobbs Ferry, New York",
+            "hometown": "Dob Ferry, New York",
             "location": "Palo Alto, California",
             "bio": "I'm trying to make the world a more open place.",
             "work": None,
@@ -2146,4 +2141,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
