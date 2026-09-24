@@ -1,4 +1,4 @@
-Toàn bộ code hoàn chỉnh của file main.py đã ghép nối đầy đủ tất cả các tính năng (fix tải YouTube chống kẹt, render thẻ phát nhạc HD 2000x760 siêu nét, tự động báo về Admin ID 8297032840 khi có người dùng hoặc đầy bộ nhớ, và format lệnh /fb chuẩn Kem DEV):
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
