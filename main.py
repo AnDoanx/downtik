@@ -1,5 +1,4 @@
-Lỗi này xảy ra là do trong file code của bạn, hàm def cmd_sing(...) đang bị vô tình đặt bên trong hoặc bị thụt lề (indentation) của một hàm khác, hoặc file code trên VPS/Railway bị lưu đè không trọn vẹn khiến Python khi đọc đến dòng app.add_handler(CommandHandler("sing", cmd_sing)) không tìm thấy cmd_sing ở phạm vi toàn cục (global scope).
-Dưới đây là file main.py chuẩn chỉnh, đã được sắp xếp định nghĩa tất cả các hàm cmd_* và handler lên trên rõ ràng, thụt lề chuẩn xác từng dòng, đảm bảo 100% không còn dính NameError:
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
