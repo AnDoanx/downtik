@@ -44,7 +44,7 @@ ALLOWED_USERS = []
 
 FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
 
-# Hỗ trợ truyền cookies.txt qua biến môi trường để vượt bản quyền YouTube
+# Hỗ trợ truyền cookies.txt qua biến môi trường để tải YouTube
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
 COOKIE_FILE_PATH = None
 
@@ -132,15 +132,17 @@ def ensure_full_url(url: str) -> str:
     return url
 
 
-# ================= HÀM TIỆN ÍCH DỌN RÁC Ổ CỨNG VÀ BỘ NHỚ =================
+# ================= HÀM DỌN RÁC Ổ CỨNG VÀ BỘ NHỚ =================
 def clean_temp_storage_files():
-    """Xóa file rác yt-dlp, file tạm âm thanh video trong tempdir."""
+    """Xóa các file tạm tải về của yt-dlp và media trong thư mục temp."""
     tmp_dir = tempfile.gettempdir()
     deleted_count = 0
     freed_bytes = 0
     try:
         for fname in os.listdir(tmp_dir):
-            if fname.startswith(("ytdl_", "sc_", "yt_tmp_")) or fname.endswith((".mp4", ".mp3", ".webm", ".m4a", ".part", ".ytdl")):
+            if fname.startswith(("ytdl_", "sc_", "yt_tmp_")) or fname.endswith(
+                (".mp4", ".mp3", ".webm", ".m4a", ".part", ".ytdl")
+            ):
                 fpath = os.path.join(tmp_dir, fname)
                 try:
                     if os.path.isfile(fpath) or os.path.islink(fpath):
@@ -183,7 +185,7 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
     return None
 
 
-# ================= CACHE FONT & TỰ ĐỘNG TẢI NẾU THIẾU =================
+# ================= CACHE FONT CANVAS =================
 CACHED_FONT_DATA = None
 
 async def get_crisp_font(size: int, bold: bool = False, session: aiohttp.ClientSession = None):
@@ -258,7 +260,6 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
         except Exception:
             ram_mb = 52.3
 
-    # Lấy thông số ổ cứng
     total, used, free = shutil.disk_usage("/")
     free_gb = round(free / (1024 ** 3), 2)
 
@@ -332,7 +333,7 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
         ("TikWM Gateway:", "ONLINE (HD 1080p)", (74, 222, 128)),
         ("YouTube Core:", "Android/TV Bypassed", (74, 222, 128)),
         ("Disk Trống:", f"{free_gb} GB Available", (74, 222, 128) if free_gb > 1.0 else (239, 68, 68)),
-        ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (251, 191, 36)),
+        ("FB Follower Sync:", "Multi-Engine Active", (74, 222, 128)),
         ("DRM Engine:", "Cipher Unpack Online", (74, 222, 128)),
         ("Auto Cleaner:", "Zero-Disk Waste Engine", (226, 232, 240)),
     ]
@@ -357,7 +358,7 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
     draw.rounded_rectangle([c1_x1 + 25, pb_y + 24, c1_x1 + 25 + int((card_w - 50) * ram_ratio), pb_y + 44], radius=8, fill=(249, 115, 22))
 
     draw.text((c2_x1 + 25, pb_y), "NETWORK HEALTH (PING)", fill=(203, 213, 225), font=f_bar)
-    draw.rounded_rectangle([c2_x1 + 25, pb_y + 44], radius=8, fill=(30, 41, 59))
+    draw.rounded_rectangle([c2_x1 + 25, pb_y + 24, c2_x2 - 25, pb_y + 44], radius=8, fill=(30, 41, 59))
     ping_ratio = max(0.1, 1.0 - min(ping_ms / 800, 0.9))
     draw.rounded_rectangle([c2_x1 + 25, pb_y + 24, c2_x1 + 25 + int((card_w - 50) * ping_ratio), pb_y + 44], radius=8, fill=(34, 197, 94))
 
@@ -465,15 +466,8 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-# ================= TẢI AUDIO TỐI ƯU DUNG LƯỢNG (FIX LỖI QUÁ TẢI/TRÀN BỘ NHỚ) =================
+# ================= TẢI AUDIO TỐI ƯU DUNG LƯỢNG =================
 def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[io.BytesIO | None, dict]:
-    """
-    Tải audio YouTube tối ưu dung lượng:
-    1. Chủ động dọn file rác cũ trước khi tải.
-    2. Sử dụng format nén bitrate nhẹ hơn nếu file gốc quá nặng (tránh tràn đĩa).
-    3. Tắt lưu cache ổ cứng bằng no_cache_dir=True.
-    4. Xóa ngay lập tức file vật lý sau khi nạp vào memory stream.
-    """
     clean_temp_storage_files()
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -485,7 +479,6 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
         ["tv", "mweb"],
     ]
 
-    # Format fallback: Ưu tiên audio nén dưới 128kbps để tiết kiệm dung lượng đĩa
     format_priority = "ba[abr<=96]/ba[abr<=128]/bestaudio[ext=m4a]/bestaudio/best"
 
     for clients in client_strategies:
@@ -495,8 +488,8 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
-            "no_cache_dir": True,  # Ngăn tạo bộ nhớ đệm phình to ổ đĩa
-            "max_filesize": 48 * 1024 * 1024,  # Giới hạn an toàn Telegram Bot API
+            "no_cache_dir": True,
+            "max_filesize": 48 * 1024 * 1024,
             "extractor_args": {
                 "youtube": {
                     "player_client": clients,
@@ -547,7 +540,6 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                 except Exception:
                     pass
 
-    # Fallback sang SoundCloud nếu YouTube chặn hoặc bị lỗi bộ nhớ
     if search_query:
         logger.info(f"Kích hoạt SoundCloud fallback: {search_query}")
         sc_template = os.path.join(tmp_dir, f"sc_{video_id}_%(id)s.%(ext)s")
@@ -597,7 +589,7 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
     return None, {}
 
 
-# ================= LOGIC FACEBOOK =================
+# ================= LOGIC FACEBOOK & KIỂM TRA FOLLOWER THẬT =================
 def estimate_fb_creation_details(uid: str) -> str:
     if not uid.isdigit():
         return "Không công khai"
@@ -712,10 +704,64 @@ async def get_fb_id(input_str: str) -> str | None:
     return None
 
 
+async def fetch_fb_follower_external_engines(uid: str) -> str | None:
+    """Fallback độc lập để lấy số follower FB nếu mbasic hoặc Graph API bị chặn."""
+    session = await get_http_session()
+    
+    # 1. Thử lấy qua endpoint phân tích công khai của look-up engines
+    lookup_urls = [
+        f"https://subgiare.vn/api/service/facebook/get-uid-info?uid={uid}",
+        f"https://ffb.vn/api/tool/get-info-fb?uid={uid}"
+    ]
+    for target in lookup_urls:
+        try:
+            async with session.get(target, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    fol = (
+                        data.get("followers") or
+                        data.get("sub") or
+                        data.get("data", {}).get("followers") or
+                        data.get("data", {}).get("sub")
+                    )
+                    if fol:
+                        clean_str = re.sub(r"[^\d]", "", str(fol))
+                        if clean_str:
+                            return clean_str
+        except Exception:
+            pass
+            
+    # 2. Thử truy vấn trực tiếp mobile endpoint không qua proxy
+    try:
+        m_url = f"https://m.facebook.com/{uid}"
+        headers = {
+            **COMMON_HEADERS,
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+        }
+        if FB_COOKIE:
+            headers["Cookie"] = FB_COOKIE
+        async with session.get(m_url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+            if resp.status == 200:
+                html_txt = await resp.text()
+                match = re.search(r'([0-9.,KMB]+)\s*(?:người theo dõi|Followers|people follow this)', html_txt, re.IGNORECASE)
+                if match:
+                    raw_val = match.group(1).strip()
+                    return raw_val.replace(".", "").replace(",", "")
+    except Exception:
+        pass
+
+    return None
+
+
 async def scrape_fb_full_details(uid: str) -> dict:
+    """Cào chi tiết thông tin và follower Facebook với regex tối ưu."""
     session = await get_http_session()
     headers = {
-        "User-Agent": COMMON_HEADERS["User-Agent"],
+        "User-Agent": (
+            "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+        ),
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
     }
     if FB_COOKIE:
@@ -739,11 +785,19 @@ async def scrape_fb_full_details(uid: str) -> dict:
         ) as r:
             if r.status == 200:
                 html_text = await r.text()
+                # Regex tối ưu hóa bao quát tất cả cách viết follow của Facebook
                 fol_match = re.search(
-                    r"(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)",
+                    r"(?:Có|Followed by|Theo dõi bởi)\s+([0-9.,]+)\s+(?:người theo dõi|người|people)",
                     html_text,
                     re.IGNORECASE,
                 )
+                if not fol_match:
+                    fol_match = re.search(
+                        r"([0-9.,]+)\s*(?:người theo dõi|người đang theo dõi)",
+                        html_text,
+                        re.IGNORECASE,
+                    )
+
                 if fol_match:
                     extracted["followers"] = fol_match.group(1).replace(".", "").replace(",", "").strip()
 
@@ -799,7 +853,7 @@ async def scrape_fb_full_details(uid: str) -> dict:
 
                 if not extracted["followers"]:
                     m_fol = re.search(
-                        r"(?:Có|Followed by)\s+([\d.,]+)\s+(?:người theo dõi|people)",
+                        r"(?:Có|Followed by|Theo dõi bởi)\s+([0-9.,]+)\s+(?:người theo dõi|people)",
                         raw_html,
                         re.IGNORECASE,
                     )
@@ -826,6 +880,12 @@ async def scrape_fb_full_details(uid: str) -> dict:
     except Exception as e:
         logger.warning(f"Lỗi scrape about: {e}")
 
+    # Nếu vẫn chưa tìm ra follower, chạy tiếp bộ fallback engine
+    if not extracted.get("followers"):
+        fb_fol_ext = await fetch_fb_follower_external_engines(uid)
+        if fb_fol_ext:
+            extracted["followers"] = fb_fol_ext
+
     return extracted
 
 
@@ -848,7 +908,8 @@ async def fetch_fb_info(uid: str) -> dict | None:
         "social_links": [],
     }
 
-    fields_target = "id,name,gender,is_verified,short_name,username,updated_time,about,hometown,location,work,education"
+    # Thêm trường subscribers.summary(true).limit(0) để ép Graph API trả về follower nếu token hỗ trợ
+    fields_target = "id,name,gender,is_verified,short_name,username,updated_time,about,hometown,location,work,education,subscribers.summary(true).limit(0)"
     for token in FB_TOKENS:
         if not token:
             continue
@@ -867,6 +928,10 @@ async def fetch_fb_info(uid: str) -> dict | None:
                         result["hometown"] = res["hometown"].get("name")
                     if isinstance(res.get("location"), dict):
                         result["location"] = res["location"].get("name")
+                    # Lấy followers từ token nếu có quyền
+                    subs = res.get("subscribers", {}).get("summary", {}).get("total_count")
+                    if subs is not None:
+                        result["followers"] = str(subs)
                     break
         except Exception as e:
             logger.warning(f"Graph API pass: {e}")
@@ -905,7 +970,7 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         clean_fol = str(raw_fol).replace(",", "").replace(".", "").strip()
         followers_str = f"<b>{int(clean_fol):,}</b> người theo dõi" if clean_fol.isdigit() else f"<b>{raw_fol}</b> người theo dõi"
     else:
-        followers_str = "<i>Không công khai hoặc tắt follow</i>"
+        followers_str = "<i>Không công khai hoặc đã ẩn follow</i>"
 
     raw_created = data.get("created_time")
     created_str = (
@@ -1149,11 +1214,11 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
         f"Hệ thống đa năng: Tải Media HD, Nghe nhạc YouTube & Tra cứu Profile.\n\n"
         f"📌 <b>LỆNH TRUY CẬP NHANH:</b>\n"
         f"• 🎶 <b>Nhạc YouTube:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
-        f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto Full HD)\n"
+        f"• 📥 <b>Tải TikTok:</b> Gửi link trực tiếp (Auto HD)\n"
         f"• 🎵 <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
         f"• 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
         f"• 🔵 <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
-        f"• 🧹 <b>Dọn rác đĩa & RAM (delay 5s):</b> <code>/cleanup</code>\n"
+        f"• 🧹 <b>Dọn rác & RAM:</b> <code>/cleanup</code>\n"
         f"• 📊 <b>Status Máy Chủ:</b> <code>/status</code>\n"
         f"<code>────────────────────────────</code>\n"
         f"🟢 <b>Status:</b> <i>Railway Container Engine Online</i>"
@@ -1170,7 +1235,7 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
         ],
         [
             InlineKeyboardButton("🔵 Info Facebook", callback_data="panel_guide_fb"),
-            InlineKeyboardButton("🧹 Dọn Rác Máy Chủ", callback_data="panel_cleanup"),
+            InlineKeyboardButton("🧹 Dọn Rác & RAM", callback_data="panel_cleanup"),
         ],
         [
             InlineKeyboardButton("📊 Server Status", callback_data="panel_status"),
@@ -1179,51 +1244,55 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
     return panel, InlineKeyboardMarkup(keyboard)
 
 
-# ================= XỬ LÝ LỆNH DỌN RÁC (CÁCH 5S MỖI LỆNH) =================
+# ================= LỆNH DỌN RÁC & GIẢI PHÓNG BỘ NHỚ =================
 async def run_system_cleanup(status_msg):
     """Tiến hành dọn rác bộ nhớ và file tạm với khoảng nghỉ 5s."""
-    # BƯỚC 1: Dọn dẹp RAM & GC
-    await status_msg.edit_text(
-        "🧹 <b>[Bước 1/3] Đang thu hồi bộ nhớ RAM và giải phóng Python Garbage Collector...</b>\n"
-        "⏳ <i>Vui lòng đợi 5 giây...</i>",
-        parse_mode=ParseMode.HTML,
-    )
-    collected = gc.collect()
-    logger.info(f"Đã giải phóng GC: {collected} objects.")
-    await asyncio.sleep(5)
+    try:
+        # BƯỚC 1: Dọn RAM & GC
+        await status_msg.edit_text(
+            "🧹 <b>[Bước 1/3] Đang thu hồi bộ nhớ RAM và giải phóng Python Garbage Collector...</b>\n"
+            "⏳ <i>Vui lòng đợi 5 giây...</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        collected = gc.collect()
+        logger.info(f"Đã giải phóng GC: {collected} objects.")
+        await asyncio.sleep(5)
 
-    # BƯỚC 2: Quét & xóa toàn bộ file tạm tải về
-    await status_msg.edit_text(
-        "🗄️ <b>[Bước 2/3] Đang quét và xóa các file cache âm thanh, video tạm trong ổ đĩa...</b>\n"
-        "⏳ <i>Vui lòng đợi 5 giây...</i>",
-        parse_mode=ParseMode.HTML,
-    )
-    loop = asyncio.get_running_loop()
-    del_count, freed_bytes = await loop.run_in_executor(None, clean_temp_storage_files)
-    freed_mb = round(freed_bytes / (1024 * 1024), 2)
-    logger.info(f"Dọn dẹp hoàn tất: Xóa {del_count} file, giải phóng {freed_mb} MB.")
-    await asyncio.sleep(5)
+        # BƯỚC 2: Quét & xóa toàn bộ file tạm tải về
+        await status_msg.edit_text(
+            "🗄️ <b>[Bước 2/3] Đang quét và xóa các file cache âm thanh, video tạm trong ổ đĩa...</b>\n"
+            "⏳ <i>Vui lòng đợi 5 giây...</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        loop = asyncio.get_running_loop()
+        del_count, freed_bytes = await loop.run_in_executor(None, clean_temp_storage_files)
+        freed_mb = round(freed_bytes / (1024 * 1024), 2)
+        logger.info(f"Dọn dẹp hoàn tất: Xóa {del_count} file, giải phóng {freed_mb} MB.")
+        await asyncio.sleep(5)
 
-    # BƯỚC 3: Đồng bộ trạng thái ổ đĩa
-    await status_msg.edit_text(
-        "📊 <b>[Bước 3/3] Đang đồng bộ hóa trạng thái tài nguyên ổ đĩa...</b>\n"
-        "⏳ <i>Vui lòng đợi 5 giây...</i>",
-        parse_mode=ParseMode.HTML,
-    )
-    await asyncio.sleep(5)
+        # BƯỚC 3: Đồng bộ trạng thái ổ đĩa
+        await status_msg.edit_text(
+            "📊 <b>[Bước 3/3] Đang đồng bộ hóa trạng thái tài nguyên ổ đĩa...</b>\n"
+            "⏳ <i>Vui lòng đợi 5 giây...</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        await asyncio.sleep(5)
 
-    total, used, free = shutil.disk_usage("/")
-    free_gb = round(free / (1024 ** 3), 2)
+        total, used, free = shutil.disk_usage("/")
+        free_gb = round(free / (1024 ** 3), 2)
 
-    result_text = (
-        f"✅ <b>GIẢI PHÓNG DUNG LƯỢNG THÀNH CÔNG!</b>\n"
-        f"<code>────────────────────────────</code>\n"
-        f"🗑️ <b>Số tệp tạm đã xóa:</b> <code>{del_count}</code> files\n"
-        f"📦 <b>Dung lượng dọn sạch:</b> <code>{freed_mb} MB</code>\n"
-        f"💾 <b>Dung lượng trống còn lại:</b> <code>{free_gb} GB</code>\n"
-        f"⚡ <b>Trạng thái:</b> Sẵn sàng tải YouTube / TikTok không lo tràn ổ."
-    )
-    await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
+        result_text = (
+            f"✅ <b>GIẢI PHÓNG DUNG LƯỢNG THÀNH CÔNG!</b>\n"
+            f"<code>────────────────────────────</code>\n"
+            f"🗑️ <b>Số tệp tạm đã xóa:</b> <code>{del_count}</code> files\n"
+            f"📦 <b>Dung lượng dọn sạch:</b> <code>{freed_mb} MB</code>\n"
+            f"💾 <b>Dung lượng trống còn lại:</b> <code>{free_gb} GB</code>\n"
+            f"⚡ <b>Trạng thái:</b> Sẵn sàng tải YouTube / TikTok không lo tràn ổ."
+        )
+        await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Lỗi khi dọn rác hệ thống: {e}")
+        await status_msg.edit_text(f"❌ Quá trình dọn rác gặp sự cố: {e}")
 
 
 async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1362,7 +1431,8 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "🔵 <b>TRA CỨU FACEBOOK PROFILE PRO</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
-            "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc link tài khoản bất kỳ."
+            "• <i>Ví dụ:</i> <code>/fb 4</code> hoặc link tài khoản bất kỳ.\n"
+            "• Hệ thống đa luồng quét trực tiếp số Follower thật."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1467,7 +1537,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ================= CALLBACK TẢI AUDIO YOUTUBE (TỰ ĐỘNG CHỐNG TRÀN ĐĨA) =================
+# ================= CALLBACK TẢI AUDIO YOUTUBE =================
 async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("⏳ Đang xử lý âm thanh...", show_alert=False)
@@ -1543,7 +1613,7 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!", parse_mode=ParseMode.HTML)
         return
 
-    await status_msg.edit_text(f"📡 <i>Đang quét dữ liệu OSINT cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
+    await status_msg.edit_text(f"📡 <i>Đang quét dữ liệu OSINT & Follower cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
     data = await fetch_fb_info(uid)
 
     if not data:
@@ -1857,7 +1927,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("cleanup", cmd_cleanup))  # Lệnh dọn rác mới
+    app.add_handler(CommandHandler("cleanup", cmd_cleanup))
     app.add_handler(CommandHandler("sing", cmd_sing))
     app.add_handler(CommandHandler("getinfo", cmd_getinfo))
     app.add_handler(CommandHandler("music", cmd_music))
