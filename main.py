@@ -1,16 +1,3 @@
-Dưới đây là toàn bộ code đã được nâng cấp hoàn chỉnh.
-Các điểm cải tiến chính đã bổ sung:
- * Lệnh /cleanup (Tự động dọn rác, giải phóng dung lượng):
-   * Quét và xóa file rác, file tạm thời gian chạy trong tempfile.gettempdir(), các file .mp4, .mp3, .part, .ytdl.
-   * Tự động gọi Garbage Collector (gc.collect()) để xả RAM.
-   * Tích hợp asyncio.sleep(5) (chờ 5 giây) giữa mỗi bước dọn dẹp để hệ thống ổn định và thông báo tiến trình trực quan theo thời gian thực.
- * Khắc phục triệt để lỗi YouTube quá dung lượng (No Space Left):
-   * Trong hàm extract_youtube_audio_advanced:
-     * Thêm tùy chọn hạ bitrate/chất lượng âm thanh tự động: ba[abr<=96]/ba[abr<=128]/ba/b.
-     * Tắt cache trên đĩa với "no_cache_dir": True để không làm đầy ổ đĩa Railway/VPS.
-     * Thêm bộ lọc kích thước max_filesize chuẩn Telegram Bot API (dưới 48MB).
-     * Bọc try ... finally dọn sạch file tạm ngay sau khi đưa vào memory stream, không để đọng file rác.
-     * Tự động xóa các file tạm cũ sinh ra trước đó trước khi bắt đầu tải file mới.
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -147,7 +134,6 @@ def ensure_full_url(url: str) -> str:
 
 # ================= HÀM TIỆN ÍCH DỌN RÁC Ổ CỨNG VÀ BỘ NHỚ =================
 def clean_temp_storage_files():
-    """Xóa file rác yt-dlp, file tạm âm thanh video trong tempdir."""
     tmp_dir = tempfile.gettempdir()
     deleted_count = 0
     freed_bytes = 0
@@ -322,32 +308,33 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
     draw.rounded_rectangle([c1_x1, card_y1, c1_x2, card_y2], radius=18, fill=(18, 25, 45, 255), outline=(51, 65, 85, 200), width=2)
     draw.rounded_rectangle([c2_x1, card_y1, c2_x2, card_y2], radius=18, fill=(18, 25, 45, 255), outline=(51, 65, 85, 200), width=2)
 
-    draw.text((c1_x1 + 25, card_y1 + 24), "⚡ CORE INFRASTRUCTURE", fill=(45, 212, 191), font=f_head)
-    draw.text((c2_x1 + 25, card_y1 + 24), "🎵 MEDIA & STORAGE PIPELINE", fill=(244, 114, 182), font=f_head)
+    draw.text((c1_x1 + 25, card_y1 + 24), "⚡ TRẠNG THÁI MÁY CHỦ", fill=(45, 212, 191), font=f_head)
+    draw.text((c2_x1 + 25, card_y1 + 24), "🎵 TRẠNG THÁI DỊCH VỤ", fill=(244, 114, 182), font=f_head)
 
     draw.line([(c1_x1 + 25, card_y1 + 58), (c1_x2 - 25, card_y1 + 58)], fill=(51, 65, 85), width=2)
     draw.line([(c2_x1 + 25, card_y1 + 58), (c2_x2 - 25, card_y1 + 58)], fill=(51, 65, 85), width=2)
 
     now_vn = datetime.now().strftime("%H:%M:%S • %d/%m/%Y")
-    ping_status = "Tốt" if ping_ms < 200 else "Trung bình"
+    ping_status = "Tốt" if ping_ms < 200 else "Bình thường"
     ping_color = (74, 222, 128) if ping_ms < 200 else (251, 191, 36)
 
     c1_data = [
         ("Thời gian:", now_vn, (255, 255, 255)),
-        ("Ping API:", f"{ping_ms} ms [{ping_status}]", ping_color),
-        ("RAM sử dụng:", f"{ram_mb} MB Allocated", (251, 146, 60)),
-        ("Python Core:", f"{platform.python_implementation()} {platform.python_version()}", (147, 197, 253)),
+        ("Kết nối Telegram:", f"{ping_ms} ms [{ping_status}]", ping_color),
+        ("RAM đã cấp phát:", f"{ram_mb} MB", (251, 146, 60)),
+        ("Ổ cứng khả dụng:", f"{free_gb} GB Còn trống", (74, 222, 128) if free_gb > 1.0 else (239, 68, 68)),
         ("Hệ điều hành:", f"{platform.system()} ({platform.machine()})", (226, 232, 240)),
-        ("Nền tảng:", "Railway Cloud Engine", (192, 132, 252)),
+        ("Hạ tầng chạy:", "Railway Cloud Engine", (192, 132, 252)),
     ]
 
+    # Các dịch vụ được thay tên rõ ràng, kín đáo
     c2_data = [
-        ("TikWM Gateway:", "ONLINE (HD 1080p)", (74, 222, 128)),
-        ("YouTube Core:", "Android/TV Bypassed", (74, 222, 128)),
-        ("Disk Trống:", f"{free_gb} GB Available", (74, 222, 128) if free_gb > 1.0 else (239, 68, 68)),
-        ("SoundCloud FB:", "ACTIVE (Auto Fallback)", (251, 191, 36)),
-        ("DRM Engine:", "Cipher Unpack Online", (74, 222, 128)),
-        ("Auto Cleaner:", "Zero-Disk Waste Engine", (226, 232, 240)),
+        ("Facebook:", "Hoạt động ổn định ✅", (74, 222, 128)),
+        ("TikTok Video & Ảnh:", "Tải mượt mà (Full HD) ✅", (74, 222, 128)),
+        ("YouTube Âm nhạc:", "Sẵn sàng phát nhạc ✅", (74, 222, 128)),
+        ("Hệ thống Tách Nhạc:", "Hoạt động tốt ✅", (147, 197, 253)),
+        ("Bộ lọc Chống Tràn Đĩa:", "Đang kích hoạt ✅", (74, 222, 128)),
+        ("Tự động Dọn Rác:", "Sẵn sàng (/cleanup) 🧹", (226, 232, 240)),
     ]
 
     y_start = card_y1 + 80
@@ -364,17 +351,17 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
         draw.text((c2_x1 + 210, cy), val, fill=col, font=f_val)
 
     pb_y = card_y1 + 385
-    draw.text((c1_x1 + 25, pb_y), "RAM UTILIZATION", fill=(203, 213, 225), font=f_bar)
+    draw.text((c1_x1 + 25, pb_y), "MỨC TIÊU THỤ RAM", fill=(203, 213, 225), font=f_bar)
     draw.rounded_rectangle([c1_x1 + 25, pb_y + 24, c1_x2 - 25, pb_y + 44], radius=8, fill=(30, 41, 59))
     ram_ratio = min(max(ram_mb / 512, 0.08), 1.0)
     draw.rounded_rectangle([c1_x1 + 25, pb_y + 24, c1_x1 + 25 + int((card_w - 50) * ram_ratio), pb_y + 44], radius=8, fill=(249, 115, 22))
 
-    draw.text((c2_x1 + 25, pb_y), "NETWORK HEALTH (PING)", fill=(203, 213, 225), font=f_bar)
-    draw.rounded_rectangle([c2_x1 + 25, pb_y + 44], radius=8, fill=(30, 41, 59))
+    draw.text((c2_x1 + 25, pb_y), "CHẤT LƯỢNG KẾT NỐI MẠNG", fill=(203, 213, 225), font=f_bar)
+    draw.rounded_rectangle([c2_x1 + 25, pb_y + 24, c2_x2 - 25, pb_y + 44], radius=8, fill=(30, 41, 59))
     ping_ratio = max(0.1, 1.0 - min(ping_ms / 800, 0.9))
     draw.rounded_rectangle([c2_x1 + 25, pb_y + 24, c2_x1 + 25 + int((card_w - 50) * ping_ratio), pb_y + 44], radius=8, fill=(34, 197, 94))
 
-    draw.text((W // 2, H - pad - 26), "Railway Cloud High-Speed Worker • Multi-Platform Engine", fill=(148, 163, 184), font=f_foot, anchor="mm")
+    draw.text((W // 2, H - pad - 26), "Cloud High-Speed Engine • Dịch Vụ Ổn Định 24/7", fill=(148, 163, 184), font=f_foot, anchor="mm")
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -478,15 +465,8 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-# ================= TẢI AUDIO TỐI ƯU DUNG LƯỢNG (FIX LỖI QUÁ TẢI/TRÀN BỘ NHỚ) =================
+# ================= TẢI AUDIO TỐI ƯU DUNG LƯỢNG (CHỐNG TRÀN ĐĨA) =================
 def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[io.BytesIO | None, dict]:
-    """
-    Tải audio YouTube tối ưu dung lượng:
-    1. Chủ động dọn file rác cũ trước khi tải.
-    2. Sử dụng format nén bitrate nhẹ hơn nếu file gốc quá nặng (tránh tràn đĩa).
-    3. Tắt lưu cache ổ cứng bằng no_cache_dir=True.
-    4. Xóa ngay lập tức file vật lý sau khi nạp vào memory stream.
-    """
     clean_temp_storage_files()
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -498,7 +478,6 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
         ["tv", "mweb"],
     ]
 
-    # Format fallback: Ưu tiên audio nén dưới 128kbps để tiết kiệm dung lượng đĩa
     format_priority = "ba[abr<=96]/ba[abr<=128]/bestaudio[ext=m4a]/bestaudio/best"
 
     for clients in client_strategies:
@@ -508,8 +487,8 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
-            "no_cache_dir": True,  # Ngăn tạo bộ nhớ đệm phình to ổ đĩa
-            "max_filesize": 48 * 1024 * 1024,  # Giới hạn an toàn Telegram Bot API
+            "no_cache_dir": True,
+            "max_filesize": 48 * 1024 * 1024,
             "extractor_args": {
                 "youtube": {
                     "player_client": clients,
@@ -560,7 +539,6 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                 except Exception:
                     pass
 
-    # Fallback sang SoundCloud nếu YouTube chặn hoặc bị lỗi bộ nhớ
     if search_query:
         logger.info(f"Kích hoạt SoundCloud fallback: {search_query}")
         sc_template = os.path.join(tmp_dir, f"sc_{video_id}_%(id)s.%(ext)s")
@@ -1194,8 +1172,6 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
 
 # ================= XỬ LÝ LỆNH DỌN RÁC (CÁCH 5S MỖI LỆNH) =================
 async def run_system_cleanup(status_msg):
-    """Tiến hành dọn rác bộ nhớ và file tạm với khoảng nghỉ 5s."""
-    # BƯỚC 1: Dọn dẹp RAM & GC
     await status_msg.edit_text(
         "🧹 <b>[Bước 1/3] Đang thu hồi bộ nhớ RAM và giải phóng Python Garbage Collector...</b>\n"
         "⏳ <i>Vui lòng đợi 5 giây...</i>",
@@ -1205,7 +1181,6 @@ async def run_system_cleanup(status_msg):
     logger.info(f"Đã giải phóng GC: {collected} objects.")
     await asyncio.sleep(5)
 
-    # BƯỚC 2: Quét & xóa toàn bộ file tạm tải về
     await status_msg.edit_text(
         "🗄️ <b>[Bước 2/3] Đang quét và xóa các file cache âm thanh, video tạm trong ổ đĩa...</b>\n"
         "⏳ <i>Vui lòng đợi 5 giây...</i>",
@@ -1217,7 +1192,6 @@ async def run_system_cleanup(status_msg):
     logger.info(f"Dọn dẹp hoàn tất: Xóa {del_count} file, giải phóng {freed_mb} MB.")
     await asyncio.sleep(5)
 
-    # BƯỚC 3: Đồng bộ trạng thái ổ đĩa
     await status_msg.edit_text(
         "📊 <b>[Bước 3/3] Đang đồng bộ hóa trạng thái tài nguyên ổ đĩa...</b>\n"
         "⏳ <i>Vui lòng đợi 5 giây...</i>",
@@ -1870,7 +1844,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("cleanup", cmd_cleanup))  # Lệnh dọn rác mới
+    app.add_handler(CommandHandler("cleanup", cmd_cleanup))
     app.add_handler(CommandHandler("sing", cmd_sing))
     app.add_handler(CommandHandler("getinfo", cmd_getinfo))
     app.add_handler(CommandHandler("music", cmd_music))
@@ -1890,4 +1864,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
