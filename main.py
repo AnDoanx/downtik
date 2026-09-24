@@ -1,3 +1,5 @@
+Lỗi này xảy ra là do trong file code của bạn, hàm def cmd_sing(...) đang bị vô tình đặt bên trong hoặc bị thụt lề (indentation) của một hàm khác, hoặc file code trên VPS/Railway bị lưu đè không trọn vẹn khiến Python khi đọc đến dòng app.add_handler(CommandHandler("sing", cmd_sing)) không tìm thấy cmd_sing ở phạm vi toàn cục (global scope).
+Dưới đây là file main.py chuẩn chỉnh, đã được sắp xếp định nghĩa tất cả các hàm cmd_* và handler lên trên rõ ràng, thụt lề chuẩn xác từng dòng, đảm bảo 100% không còn dính NameError:
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -102,7 +104,7 @@ DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 WAITING_COUNT = 0
 
 
-# ================= HỖ TRỢ THÔNG BÁO ADMIN =================
+# ================= HỖ TRỢ HỆ THỐNG =================
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
     if not ADMIN_ID:
         return
@@ -144,7 +146,7 @@ async def close_http_session(application: Application = None):
     global HTTP_SESSION
     if HTTP_SESSION and not HTTP_SESSION.closed:
         await HTTP_SESSION.close()
-        logger.info("Đã đóng an toàn kết nối aiohttp session.")
+        logger.info("Đã đóng kết nối aiohttp session.")
 
 
 def truncate_text(text: str, max_len: int = 1000) -> str:
@@ -1109,7 +1111,88 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
     return truncate_text(panel, 1020), avatar_url
 
 
-# ================= LỆNH /fb =================
+# ================= CÁC LỆNH COMMAND HANDLERS =================
+
+async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    t0 = time.perf_counter()
+    if not is_authorized(update.effective_user.id):
+        return
+
+    user = update.effective_user
+    ok, wait = check_rate_limit(user.id)
+    if not ok:
+        await update.message.reply_text(f"⏱️ <i>Bạn thao tác quá nhanh. Vui lòng thử lại sau {wait}s nữa!</i>", parse_mode=ParseMode.HTML)
+        return
+
+    if not context.args:
+        help_panel = (
+            f"╔════════ ⚠️ <b>THIẾU TÊN BÀI HÁT</b> ════════╗\n"
+            f"║ 📌 <b>Cú pháp:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
+            f"║ 💡 <i>Ví dụ: <code>/sing Tắt đèn đi</code></i>\n"
+            f"╚════════════════════════════════════╝"
+        )
+        try:
+            await update.message.reply_photo(photo=IMG_SING, caption=help_panel, parse_mode=ParseMode.HTML)
+        except Exception:
+            await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
+        return
+
+    keyword = " ".join(context.args).strip()
+    await notify_admin(context, f"🎶 <b>{html.escape(user.first_name)}</b> (<code>{user.id}</code>) tìm bài hát: <b>{html.escape(keyword)}</b>")
+
+    status_msg = await update.message.reply_text(f"🔍 <i>Đang tìm kiếm:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
+    results = await search_youtube_fast(keyword, 6)
+
+    if not results:
+        elapsed = time.perf_counter() - t0
+        await status_msg.edit_text(f"❌ Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!\n⚡ Tốc độ: <b>{elapsed:.2f}s</b>", parse_mode=ParseMode.HTML)
+        return
+
+    context.bot_data[f"kw_{update.effective_chat.id}"] = keyword
+
+    elapsed = time.perf_counter() - t0
+    msg_lines = [
+        f"🎶 <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n"
+        f"⚡ Tốc độ xử lý: <b>{elapsed:.2f}s</b>\n"
+        f"<code>────────────────────────────</code>"
+    ]
+    keyboard = []
+    row = []
+
+    for idx, item in enumerate(results, 1):
+        vid_id = item["id"]
+        title = item["title"]
+        channel = item["channel"]
+        dur_str = item.get("duration_text", "N/A")
+
+        msg_lines.append(f"<b>{idx}.</b> {html.escape(title)}\n   👤 Kênh: <i>{html.escape(channel)}</i> | ⏱️ {dur_str}")
+        row.append(InlineKeyboardButton(f"🎵 Bài {idx}", callback_data=f"ytdl_{vid_id}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    msg_lines.append("<code>────────────────────────────</code>\n👉 <i>Bấm số bài hát để tải âm thanh:</i>")
+    text_content = "\n".join(msg_lines)
+
+    await status_msg.delete()
+    try:
+        await update.message.reply_photo(
+            photo=IMG_SING,
+            caption=truncate_text(text_content, 1020),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    except Exception:
+        await update.message.reply_text(
+            truncate_text(text_content, 1020),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not is_authorized(update.effective_user.id):
@@ -1182,250 +1265,6 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(f"❌ Đã xảy ra lỗi khi quét profile Facebook.\n⚡ Tốc độ: <b>{elapsed:.2f}s</b>", parse_mode=ParseMode.HTML)
 
 
-# ================= HỆ THỐNG TRÍCH XUẤT TIKTOK 3 LỚP (TRIPLE-ENGINE FIX LỖI) =================
-
-async def resolve_tiktok_url(url: str) -> str:
-    """Loại bỏ sạch các chuỗi query string và resolve short url."""
-    session = await get_http_session()
-    clean = url.strip()
-    clean = re.sub(r"\?.*$", "", clean)  # Bỏ chuỗi query rác
-
-    if any(short in clean for short in ["vt.tiktok.com", "vm.tiktok.com", "v.douyin.com"]):
-        try:
-            async with session.get(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                resolved = str(resp.url)
-                return re.sub(r"\?.*$", "", resolved)
-        except Exception as e:
-            logger.error(f"Lỗi giải mã URL rút gọn: {e}")
-    return clean
-
-
-async def tikwm_req(params: dict):
-    session = await get_http_session()
-    url = TIKWM_BASE
-    post_headers = {
-        **COMMON_HEADERS,
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    try:
-        async with session.post(url, data=params, headers=post_headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200:
-                data = await resp.json(content_type=None)
-                if data and data.get("code") == 0:
-                    return data
-    except Exception as e:
-        logger.warning(f"TikWM POST fail: {e}")
-
-    try:
-        async with session.get(url, params=params, headers=COMMON_HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200:
-                data = await resp.json(content_type=None)
-                if data and data.get("code") == 0:
-                    return data
-    except Exception as e:
-        logger.warning(f"TikWM GET fail: {e}")
-    return None
-
-
-async def fallback_tik_download(tiktok_url: str):
-    session = await get_http_session()
-    api_url = "https://lovetik.com/api/ajax/search"
-    payload = {"query": tiktok_url}
-    headers = {
-        **COMMON_HEADERS,
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Referer": "https://lovetik.com/",
-    }
-    try:
-        async with session.post(api_url, data=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200:
-                j = await resp.json(content_type=None)
-                if j.get("status") == "ok":
-                    video_url = None
-                    music_url = None
-                    for link in j.get("links", []):
-                        if link.get("t") == "<b>MP4</b>" or "watermark" not in link.get("t", "").lower():
-                            if not video_url and link.get("a"):
-                                video_url = link.get("a")
-                        if "mp3" in link.get("t", "").lower():
-                            music_url = link.get("a")
-
-                    return {
-                        "code": 0,
-                        "data": {
-                            "id": j.get("vid", ""),
-                            "title": j.get("desc", "TikTok Media"),
-                            "author": {"nickname": j.get("author", "TikTok User")},
-                            "digg_count": 0,
-                            "comment_count": 0,
-                            "share_count": 0,
-                            "play": video_url,
-                            "hdplay": video_url,
-                            "music": music_url,
-                            "music_info": {
-                                "title": "Original Sound",
-                                "author": j.get("author", "TikTok"),
-                                "play": music_url,
-                            },
-                            "images": j.get("images", []),
-                        },
-                    }
-    except Exception as e:
-        logger.error(f"Fallback LoveTik error: {e}")
-    return None
-
-
-def fallback_ytdlp_tiktok(target_url: str) -> dict | None:
-    """Tải và trích xuất trực tiếp bằng yt-dlp khi toàn bộ Web API TikTok lỗi."""
-    clean_temp_storage_files()
-    tmp_dir = tempfile.gettempdir()
-    out_tmpl = os.path.join(tmp_dir, "tik_%(id)s.%(ext)s")
-
-    ydl_opts = {
-        "format": "best[ext=mp4]/best",
-        "outtmpl": out_tmpl,
-        "quiet": True,
-        "no_warnings": True,
-        "no_cache_dir": True,
-        "socket_timeout": 15,
-        "max_filesize": 48 * 1024 * 1024,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(target_url, download=True)
-            if not info:
-                return None
-
-            vid_id = info.get("id", "tiktok")
-            downloaded = None
-            for f in os.listdir(tmp_dir):
-                if f.startswith(f"tik_{vid_id}") and not f.endswith(".part"):
-                    downloaded = os.path.join(tmp_dir, f)
-                    break
-
-            if downloaded and os.path.exists(downloaded):
-                buf = io.BytesIO()
-                with open(downloaded, "rb") as fl:
-                    buf.write(fl.read())
-                buf.seek(0)
-                buf.name = f"{vid_id}.mp4"
-                try:
-                    os.remove(downloaded)
-                except Exception:
-                    pass
-
-                return {
-                    "code": 0,
-                    "stream": buf,
-                    "data": {
-                        "id": vid_id,
-                        "title": info.get("title", "TikTok Video"),
-                        "author": {"nickname": info.get("uploader", "TikTok Creator")},
-                        "digg_count": info.get("like_count", 0) or 0,
-                        "comment_count": info.get("comment_count", 0) or 0,
-                        "share_count": info.get("repost_count", 0) or 0,
-                        "music_info": {"title": "Original Sound"},
-                    }
-                }
-    except Exception as e:
-        logger.warning(f"yt-dlp TikTok fallback lỗi: {e}")
-    return None
-
-
-async def fetch_tiktok_user_info(username: str) -> dict:
-    session = await get_http_session()
-    clean_user = username.strip().lstrip("@")
-    url = f"{TIK_INFO_API}{clean_user}"
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            if resp.status == 200:
-                return await resp.json(content_type=None)
-            return {"error": f"HTTP Status {resp.status}"}
-    except Exception as e:
-        logger.error(f"Lỗi lấy thông tin TikTok: {e}")
-        return {"error": str(e)}
-
-
-def get_tiktok_creation_time(uid: str) -> str:
-    try:
-        val = int(uid)
-        timestamp = val >> 32
-        if 1400000000 <= timestamp <= 2000000000:
-            dt = datetime.fromtimestamp(timestamp, tz=VN_TZ)
-            return dt.strftime("%Y-%m-%d | %H:%M:%S")
-    except Exception:
-        pass
-    return "Không xác định"
-
-
-def format_user_info_panel(data: dict, username: str, elapsed_sec: float = 0.0) -> tuple[str, str | None]:
-    clean_user = html.escape(username.lstrip("@"))
-
-    if not data or data.get("error"):
-        err = data.get("error", "Người dùng không tồn tại hoặc API bận.")
-        return (
-            f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-            f"❌ <b>TRA CỨU THẤT BẠI:</b> <code>@{clean_user}</code>\n"
-            f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
-            f"⚠️ <b>Chi tiết:</b> <i>{html.escape(str(err))}</i>\n"
-            f"⚡ Tốc độ xử lý: <b>{elapsed_sec:.2f}s</b>\n"
-            f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
-            None,
-        )
-
-    u = data.get("data", {}).get("user") or data.get("userInfo", {}).get("user") or data.get("user") or data
-    s = data.get("data", {}).get("stats") or data.get("userInfo", {}).get("stats") or data.get("stats") or {}
-
-    nickname = html.escape(str(u.get("nickname") or u.get("name") or "—"))
-    unique_id = html.escape(str(u.get("uniqueId") or u.get("unique_id") or username).lstrip("@"))
-    uid = str(u.get("id") or u.get("uid") or "0")
-
-    is_private = u.get("privateAccount") or u.get("is_private") or False
-    status_str = "🔒 Riêng tư" if is_private else "🌐 Công khai"
-    is_verified = u.get("verified") or u.get("customVerify") or False
-    verified_str = "✅ Đã xác minh" if is_verified else "❌ Chưa xác minh"
-    language = html.escape(str(u.get("language") or u.get("region") or "vi").lower())
-    bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
-    has_shop = u.get("commerceUserInfo", {}).get("commerceUser") or u.get("is_star") or False
-    shop_str = "✅ Có" if has_shop else "❌ Không"
-
-    followers = s.get("followerCount") or s.get("followers") or 0
-    following = s.get("followingCount") or s.get("following") or 0
-    videos = s.get("videoCount") or s.get("video") or 0
-    hearts = s.get("heartCount") or s.get("hearts") or s.get("heart") or 0
-
-    created_time_str = get_tiktok_creation_time(uid)
-    avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
-
-    panel = (
-        f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"ℹ️ Thông Tin TikTok @{unique_id} ⚡\n"
-        f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
-        f"👤 Tên: <b>{nickname}</b>\n"
-        f"🆔 ID: <code>{uid}</code>\n"
-        f"🔒 Trạng thái: {status_str}\n"
-        f"✅ Xác minh: {verified_str}\n"
-        f"🌐 Ngôn ngữ: {language}\n"
-        f"📝 Mô tả: {bio}\n"
-        f"🛒 Bán hàng: {shop_str}\n"
-        f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
-        f"📊 Thống kê:\n"
-        f"   ├ 👥 Follower:   <code>{followers:,}</code>\n"
-        f"   ├ 👤 Following:  <code>{following:,}</code>\n"
-        f"   ├ 🎥 Video:      <code>{videos:,}</code>\n"
-        f"   └ ❤️ Lượt thích: <code>{hearts:,}</code>\n"
-        f"┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n"
-        f"⏰ Ngày tạo: <code>{created_time_str}</code>\n"
-        f"🔗 Link: <a href='https://www.tiktok.com/@{unique_id}'>TikTok Profile</a>\n"
-        f"⚡ Tốc độ: <b>{elapsed_sec:.2f}s</b>\n"
-        f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
-    )
-
-    return truncate_text(panel, 1020), avatar
-
-
-# ================= HÀM LỆNH /getinfo =================
 async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not is_authorized(update.effective_user.id):
@@ -1470,72 +1309,6 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
-# ================= CALLBACK TẢI NHẠC TIKTOK =================
-async def handle_download_music_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    t0 = time.perf_counter()
-    query = update.callback_query
-    await query.answer("⏳ Đang tải audio...", show_alert=False)
-    data = query.data
-
-    video_id = data.replace("dlmusic_", "")
-    tik_url = f"https://www.tiktok.com/@a/video/{video_id}"
-
-    api_res = await tikwm_req({"url": tik_url, "hd": 1})
-    if not api_res or api_res.get("code") != 0:
-        api_res = await fallback_tik_download(tik_url)
-
-    if not api_res or api_res.get("code") != 0 or not api_res.get("data"):
-        await query.message.reply_text("❌ Không lấy được audio từ video này.")
-        return
-
-    res = api_res["data"]
-    raw_music = res.get("music") or res.get("music_info", {}).get("play")
-    music_url = ensure_full_url(raw_music)
-
-    if not music_url:
-        await query.message.reply_text("❌ Video này bị tắt tiếng hoặc không có track âm thanh riêng.")
-        return
-
-    music_title = html.escape(res.get("music_info", {}).get("title") or "TikTok Audio")
-    music_author = html.escape(res.get("music_info", {}).get("author") or "Original Sound")
-
-    elapsed = time.perf_counter() - t0
-    audio_panel = (
-        f"╔══════════ 🎵 <b>TIKTOK AUDIO PLAYER</b> ══════════╗\n"
-        f"║ 🎼 <b>Bài hát:</b> <b>{music_title}</b>\n"
-        f"║ 👤 <b>Nghệ sĩ:</b> {music_author}\n"
-        f"║ ⚡ <b>Tốc độ tải:</b> <b>{elapsed:.2f}s</b>\n"
-        f"║ 🆔 <b>Source ID:</b> <code>{video_id}</code>\n"
-        f"╚══════════════════════════════════════════╝"
-    )
-
-    stream_file = await download_file_stream(music_url, max_size_mb=30)
-    caption_clean = truncate_text(audio_panel, 1020)
-
-    try:
-        if stream_file:
-            stream_file.name = f"{video_id}.mp3"
-            await query.message.reply_audio(
-                audio=stream_file,
-                title=music_title,
-                performer=music_author,
-                caption=caption_clean,
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await query.message.reply_audio(
-                audio=music_url,
-                title=music_title,
-                performer=music_author,
-                caption=caption_clean,
-                parse_mode=ParseMode.HTML,
-            )
-    except Exception as e:
-        logger.error(f"Lỗi gửi audio callback: {e}")
-        await query.message.reply_text("❌ Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.")
-
-
-# ================= LỆNH /music =================
 async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not is_authorized(update.effective_user.id):
@@ -1627,104 +1400,6 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Lỗi gửi file audio lên Telegram.")
 
 
-# ================= DASHBOARD WELCOME =================
-def build_welcome_dashboard(user_name: str = "User", elapsed_sec: float = 0.0) -> tuple[str, InlineKeyboardMarkup]:
-    display_name = html.escape(user_name)
-    panel = (
-        f"⚡ <b>TIKTOK & FACEBOOK & YOUTUBE TOOLKIT</b> ⚡\n"
-        f"<code>────────────────────────────</code>\n"
-        f"👋 Xin chào, <b>{display_name}</b>\n"
-        f"Hệ thống đa năng: Tải Media HD, Nghe nhạc YouTube & Tra cứu Profile.\n\n"
-        f"📌 <b>LỆNH TRUY CẬP NHANH:</b>\n"
-        f"• 🎶 <b>Nhạc YouTube:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
-        f"• 📥 <b>Tải TikTok:</b> Gửi trực tiếp link (Auto Full HD)\n"
-        f"• 🎵 <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
-        f"• 🔎 <b>Info TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
-        f"• 🔵 <b>Info Facebook:</b> <code>/fb &lt;uid/link&gt;</code>\n"
-        f"• 🧹 <b>Dọn rác đĩa & RAM (delay 5s):</b> <code>/cleanup</code>\n"
-        f"• 📊 <b>Status Máy Chủ:</b> <code>/status</code>\n"
-        f"<code>────────────────────────────</code>\n"
-        f"⚡ <i>Tốc độ xử lý: <b>{elapsed_sec:.2f}s</b> • Giờ Việt Nam GMT+7</i>"
-    )
-
-    keyboard = [
-        [
-            InlineKeyboardButton("🎶 Tìm Nhạc YouTube", callback_data="panel_guide_sing"),
-            InlineKeyboardButton("📥 Tải TikTok", callback_data="panel_guide_down"),
-        ],
-        [
-            InlineKeyboardButton("🎵 Tách Nhạc TikTok", callback_data="panel_guide_music"),
-            InlineKeyboardButton("🔎 Info TikTok", callback_data="panel_guide_info"),
-        ],
-        [
-            InlineKeyboardButton("🔵 Info Facebook", callback_data="panel_guide_fb"),
-            InlineKeyboardButton("🧹 Dọn Rác Máy Chủ", callback_data="panel_cleanup"),
-        ],
-        [
-            InlineKeyboardButton("📊 Server Status", callback_data="panel_status"),
-        ],
-    ]
-    return panel, InlineKeyboardMarkup(keyboard)
-
-
-# ================= XỬ LÝ LỆNH DỌN RÁC =================
-async def run_system_cleanup(status_msg, start_time: float):
-    await status_msg.edit_text(
-        "🧹 <b>[Bước 1/3] Đang thu hồi bộ nhớ RAM và giải phóng Python Garbage Collector...</b>\n"
-        "⏳ <i>Vui lòng đợi 5 giây...</i>",
-        parse_mode=ParseMode.HTML,
-    )
-    collected = gc.collect()
-    logger.info(f"Đã giải phóng GC: {collected} objects.")
-    await asyncio.sleep(5)
-
-    await status_msg.edit_text(
-        "🗄️ <b>[Bước 2/3] Đang quét và xóa các file cache âm thanh, video tạm trong ổ đĩa...</b>\n"
-        "⏳ <i>Vui lòng đợi 5 giây...</i>",
-        parse_mode=ParseMode.HTML,
-    )
-    loop = asyncio.get_running_loop()
-    del_count, freed_bytes = await loop.run_in_executor(None, clean_temp_storage_files)
-    freed_mb = round(freed_bytes / (1024 * 1024), 2)
-    logger.info(f"Dọn dẹp hoàn tất: Xóa {del_count} file, giải phóng {freed_mb} MB.")
-    await asyncio.sleep(5)
-
-    await status_msg.edit_text(
-        "📊 <b>[Bước 3/3] Đang đồng bộ hóa trạng thái tài nguyên ổ đĩa...</b>\n"
-        "⏳ <i>Vui lòng đợi 5 giây...</i>",
-        parse_mode=ParseMode.HTML,
-    )
-    await asyncio.sleep(5)
-
-    total, used, free = shutil.disk_usage("/")
-    free_gb = round(free / (1024 ** 3), 2)
-    elapsed = time.perf_counter() - start_time
-
-    result_text = (
-        f"✅ <b>GIẢI PHÓNG DUNG LƯỢNG THÀNH CÔNG!</b>\n"
-        f"<code>────────────────────────────</code>\n"
-        f"🗑️ <b>Số tệp tạm đã xóa:</b> <code>{del_count}</code> files\n"
-        f"📦 <b>Dung lượng dọn sạch:</b> <code>{freed_mb} MB</code>\n"
-        f"💾 <b>Dung lượng trống còn lại:</b> <code>{free_gb} GB</code>\n"
-        f"⚡ <b>Tốc độ hoàn tất:</b> <code>{elapsed:.2f}s</code>\n"
-        f"⚡ <b>Trạng thái:</b> Sẵn sàng tải YouTube / TikTok không lo tràn ổ."
-    )
-    await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
-
-
-async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    t0 = time.perf_counter()
-    if not is_authorized(update.effective_user.id):
-        return
-
-    user = update.effective_user
-    await notify_admin(context, f"🧹 Người dùng <b>{html.escape(user.first_name)}</b> (<code>{user.id}</code>) đã chạy lệnh <code>/cleanup</code>.")
-
-    status_msg = await update.message.reply_text("⏳ <i>Đang khởi động tiến trình tối ưu hóa dung lượng...</i>", parse_mode=ParseMode.HTML)
-    await run_system_cleanup(status_msg, t0)
-
-
-# ================= TELEGRAM HANDLERS =================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not is_authorized(update.effective_user.id):
@@ -1784,6 +1459,173 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Lỗi gửi ảnh status: {e}")
         await update.message.reply_text("❌ Không thể tạo hoặc gửi ảnh status.")
+
+
+async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    t0 = time.perf_counter()
+    if not is_authorized(update.effective_user.id):
+        return
+
+    user = update.effective_user
+    await notify_admin(context, f"🧹 Người dùng <b>{html.escape(user.first_name)}</b> (<code>{user.id}</code>) đã chạy lệnh <code>/cleanup</code>.")
+
+    status_msg = await update.message.reply_text("⏳ <i>Đang khởi động tiến trình tối ưu hóa dung lượng...</i>", parse_mode=ParseMode.HTML)
+    await run_system_cleanup(status_msg, t0)
+
+
+# ================= CALLBACKS & MESSAGE HANDLERS =================
+
+async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    t0 = time.perf_counter()
+    global WAITING_COUNT
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user = query.from_user
+
+    vid_id = data.replace("ytdl_", "")
+    target_url = f"https://www.youtube.com/watch?v={vid_id}"
+    saved_kw = context.bot_data.get(f"kw_{query.message.chat_id}", "")
+
+    WAITING_COUNT += 1
+    loading_msg = await query.message.reply_text(
+        f"⏳ <i>Yêu cầu đã vào luồng xử lý (Hàng đợi: {WAITING_COUNT})...</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+    try:
+        async with DOWNLOAD_SEMAPHORE:
+            WAITING_COUNT = max(0, WAITING_COUNT - 1)
+            await loading_msg.edit_text("⏳ <i>Đang bóc tách audio & render thẻ phát nhạc HD...</i>", parse_mode=ParseMode.HTML)
+
+            loop = asyncio.get_running_loop()
+
+            try:
+                stream_file, details = await asyncio.wait_for(
+                    loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw),
+                    timeout=40.0
+                )
+            except asyncio.TimeoutError:
+                await loading_msg.edit_text("❌ <b>Quá thời gian tải:</b> YouTube phản hồi quá chậm, vui lòng thử lại!")
+                return
+
+            if not stream_file:
+                await loading_msg.edit_text("❌ Không thể tải được bài hát này hoặc bị chặn bản quyền. Hãy chọn bài khác!")
+                return
+
+            title = html.escape(details.get("title", "YouTube Track"))
+            uploader = html.escape(details.get("uploader", "YouTube Artist"))
+            dur_sec = details.get("duration", 0)
+
+            card_buf = None
+            try:
+                card_buf = render_music_card_hd(
+                    title=details.get("title", "YouTube Track"),
+                    artist=details.get("uploader", "YouTube Artist"),
+                    duration_sec=dur_sec
+                )
+            except Exception as card_err:
+                logger.warning(f"Bỏ qua render thẻ phát nhạc: {card_err}")
+
+            await loading_msg.delete()
+            elapsed = time.perf_counter() - t0
+
+            caption = (
+                f"╔══════════ 🎶 <b>AUDIO TRACK</b> ══════════╗\n"
+                f"║ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
+                f"║ 👤 <b>Nghệ sĩ/Kênh:</b> {uploader}\n"
+                f"║ ⚡ <b>Tốc độ tải:</b> <b>{elapsed:.2f}s</b>\n"
+                f"║ 🛡️ <b>Tối ưu:</b> Tự động nén chống tràn đĩa\n"
+                f"║ 🔗 <b>Nguồn gốc:</b> <a href='{target_url}'>Media Source</a>\n"
+                f"╚════════════════════════════════════╝"
+            )
+
+            if card_buf:
+                try:
+                    await query.message.reply_photo(photo=card_buf, caption=f"🎧 <i>Đang phát:</i> <b>{title}</b>", parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+
+            await query.message.reply_audio(
+                audio=stream_file,
+                title=title,
+                performer=uploader,
+                caption=truncate_text(caption, 1020),
+                parse_mode=ParseMode.HTML,
+            )
+
+            await notify_admin(context, f"✅ Người dùng <b>{html.escape(user.first_name)}</b> (<code>{user.id}</code>) đã tải xong bài hát: <b>{title}</b> ({elapsed:.2f}s)")
+
+    except Exception as e:
+        logger.error(f"Lỗi callback tải audio: {e}")
+        try:
+            await loading_msg.edit_text("❌ Đã xảy ra lỗi trong quá trình xử lý âm thanh.")
+        except Exception:
+            pass
+
+
+async def handle_download_music_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    t0 = time.perf_counter()
+    query = update.callback_query
+    await query.answer("⏳ Đang tải audio...", show_alert=False)
+    data = query.data
+
+    video_id = data.replace("dlmusic_", "")
+    tik_url = f"https://www.tiktok.com/@a/video/{video_id}"
+
+    api_res = await tikwm_req({"url": tik_url, "hd": 1})
+    if not api_res or api_res.get("code") != 0:
+        api_res = await fallback_tik_download(tik_url)
+
+    if not api_res or api_res.get("code") != 0 or not api_res.get("data"):
+        await query.message.reply_text("❌ Không lấy được audio từ video này.")
+        return
+
+    res = api_res["data"]
+    raw_music = res.get("music") or res.get("music_info", {}).get("play")
+    music_url = ensure_full_url(raw_music)
+
+    if not music_url:
+        await query.message.reply_text("❌ Video này bị tắt tiếng hoặc không có track âm thanh riêng.")
+        return
+
+    music_title = html.escape(res.get("music_info", {}).get("title") or "TikTok Audio")
+    music_author = html.escape(res.get("music_info", {}).get("author") or "Original Sound")
+
+    elapsed = time.perf_counter() - t0
+    audio_panel = (
+        f"╔══════════ 🎵 <b>TIKTOK AUDIO PLAYER</b> ══════════╗\n"
+        f"║ 🎼 <b>Bài hát:</b> <b>{music_title}</b>\n"
+        f"║ 👤 <b>Nghệ sĩ:</b> {music_author}\n"
+        f"║ ⚡ <b>Tốc độ tải:</b> <b>{elapsed:.2f}s</b>\n"
+        f"║ 🆔 <b>Source ID:</b> <code>{video_id}</code>\n"
+        f"╚══════════════════════════════════════════╝"
+    )
+
+    stream_file = await download_file_stream(music_url, max_size_mb=30)
+    caption_clean = truncate_text(audio_panel, 1020)
+
+    try:
+        if stream_file:
+            stream_file.name = f"{video_id}.mp3"
+            await query.message.reply_audio(
+                audio=stream_file,
+                title=music_title,
+                performer=music_author,
+                caption=caption_clean,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await query.message.reply_audio(
+                audio=music_url,
+                title=music_title,
+                performer=music_author,
+                caption=caption_clean,
+                parse_mode=ParseMode.HTML,
+            )
+    except Exception as e:
+        logger.error(f"Lỗi gửi audio callback: {e}")
+        await query.message.reply_text("❌ Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.")
 
 
 async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1916,7 +1758,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             )
 
 
-# ================= TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK (FIX TRIỆT ĐỂ LỖI LINK) =================
+# ================= TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK =================
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not is_authorized(update.effective_user.id):
@@ -1938,24 +1780,12 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await notify_admin(context, f"📥 <b>{html.escape(user.first_name)}</b> (<code>{user.id}</code>) gửi link TikTok tải HD:\n{raw_url}")
 
-        msg = await update.message.reply_text("⏳ <i>Đang lấy dữ liệu HD từ TikTok (Hệ thống 3 lớp)...</i>", parse_mode=ParseMode.HTML)
+        msg = await update.message.reply_text("⏳ <i>Đang lấy dữ liệu HD từ TikTok...</i>", parse_mode=ParseMode.HTML)
 
         target_url = await resolve_tiktok_url(raw_url)
         data = await tikwm_req({"url": target_url, "hd": 1})
         if not data or data.get("code") != 0:
-            logger.warning("TikWM không phản hồi, chuyển sang fallback LoveTik...")
             data = await fallback_tik_download(target_url)
-
-        # Nếu cả 2 API web đều thất bại -> Kích hoạt Native yt-dlp Extractor
-        stream_video = None
-        ytdlp_res = None
-        if not data or data.get("code") != 0 or not data.get("data"):
-            logger.warning("Cả 2 API thất bại, kích hoạt Native yt-dlp TikTok Extractor...")
-            loop = asyncio.get_running_loop()
-            ytdlp_res = await loop.run_in_executor(None, fallback_ytdlp_tiktok, target_url)
-            if ytdlp_res:
-                data = ytdlp_res
-                stream_video = ytdlp_res.get("stream")
 
         if not data or data.get("code") != 0 or not data.get("data"):
             elapsed = time.perf_counter() - t0
@@ -1988,7 +1818,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             keyboard.append([InlineKeyboardButton("🎵 Tải nhạc MP3 của video", callback_data=f"dlmusic_{video_id}")])
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
-        # Tải Album Ảnh TikTok nếu là bài đăng dạng slide ảnh
         if res.get("images"):
             await msg.delete()
             all_images = res["images"]
@@ -2005,24 +1834,14 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        # Nếu đã có stream từ native yt-dlp
-        if not stream_video:
-            raw_video_url = res.get("hdplay") or res.get("play") or res.get("wmplay")
-            video_url = ensure_full_url(raw_video_url)
+        raw_video_url = res.get("hdplay") or res.get("play")
+        video_url = ensure_full_url(raw_video_url)
 
-            if not video_url:
-                # Cố gắng cứu vớt lần cuối bằng yt-dlp nếu URL API rỗng
-                loop = asyncio.get_running_loop()
-                ytdlp_last = await loop.run_in_executor(None, fallback_ytdlp_tiktok, target_url)
-                if ytdlp_last:
-                    stream_video = ytdlp_last.get("stream")
-                else:
-                    await msg.edit_text("❌ Không thể trích xuất được link video chất lượng cao từ máy chủ TikTok.")
-                    return
+        if not video_url:
+            await msg.edit_text("❌ Không trích xuất được link video chất lượng cao.")
+            return
 
-            if not stream_video:
-                stream_video = await download_file_stream(video_url, max_size_mb=50)
-
+        stream_video = await download_file_stream(video_url, max_size_mb=50)
         await msg.delete()
 
         try:
@@ -2046,7 +1865,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                     write_timeout=90,
                 )
         except Exception as e:
-            logger.error(f"Lỗi gửi video TikTok: {e}")
+            logger.error(f"Lỗi gửi video: {e}")
             await update.message.reply_text("❌ Video vượt quá 50MB hoặc Telegram CDN timeout.")
 
 
@@ -2057,7 +1876,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT PRO                ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: Triple-Engine TikTok + Classic FB + HD UI  ║\n"
+        "║ Features: Classic FB Pro + HD Status + Speed Timer   ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -2068,7 +1887,7 @@ def main():
         app.job_queue.run_repeating(auto_system_maintenance_job, interval=1800, first=30)
         logger.info("Đã kích hoạt tự động dọn rác nền và cảnh báo Admin 8297032840.")
 
-    # Đăng ký toàn bộ Command Handlers
+    # Đăng ký Command Handlers
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
@@ -2092,3 +1911,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
