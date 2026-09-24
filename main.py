@@ -95,10 +95,9 @@ logger = logging.getLogger("MultiToolBot")
 
 HTTP_SESSION: aiohttp.ClientSession | None = None
 
-# ================= QUẢN LÝ RATE LIMIT & HÀNG ĐỢI (QUEUE SYSTEM) =================
 USER_LAST_ACTION: dict[int, float] = {}
-RATE_LIMIT_SECONDS = 8
-DOWNLOAD_SEMAPHORE = asyncio.Semaphore(2)  # Tối đa 2 tải nặng đồng thời
+RATE_LIMIT_SECONDS = 5
+DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 WAITING_COUNT = 0
 
 
@@ -169,9 +168,7 @@ def clean_temp_storage_files():
     return deleted_count, freed_bytes
 
 
-# ================= CRON JOB: TỰ ĐỘNG DỌN RÁC & CẢNH BÁO ADMIN =================
 async def auto_system_maintenance_job(context: ContextTypes.DEFAULT_TYPE):
-    """Chạy ngầm định kỳ mỗi 30 phút: Dọn cache, RAM và kiểm tra ngưỡng an toàn."""
     gc.collect()
     loop = asyncio.get_running_loop()
     del_count, freed_bytes = await loop.run_in_executor(None, clean_temp_storage_files)
@@ -179,23 +176,20 @@ async def auto_system_maintenance_job(context: ContextTypes.DEFAULT_TYPE):
 
     total, used, free = shutil.disk_usage("/")
     free_mb = round(free / (1024 * 1024), 2)
-
     logger.info(f"[Auto-Cron] Đã giải phóng {freed_mb} MB ({del_count} tệp). Trống: {free_mb} MB.")
 
     if free_mb < 500 and ADMIN_ID:
-        alert_text = (
-            f"🚨 <b>CẢNH BÁO NGUY CẤP DUNG LƯỢNG MÁY CHỦ!</b>\n"
-            f"<code>────────────────────────────</code>\n"
-            f"⚠️ Bộ nhớ trống hiện tại chỉ còn: <b>{free_mb} MB</b>!\n"
-            f"Bot đang thực hiện ép dọn dẹp khẩn cấp. Hãy mở rộng dung lượng host."
-        )
         try:
+            alert_text = (
+                f"🚨 <b>CẢNH BÁO NGUY CẤP DUNG LƯỢNG MÁY CHỦ!</b>\n"
+                f"<code>────────────────────────────</code>\n"
+                f"⚠️ Bộ nhớ trống hiện tại chỉ còn: <b>{free_mb} MB</b>!"
+            )
             await context.bot.send_message(chat_id=ADMIN_ID, text=alert_text, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            logger.error(f"Không thể gửi thông báo tới admin: {e}")
+        except Exception:
+            pass
 
 
-# ================= HỖ TRỢ STREAM BUFFER =================
 async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
     session = await get_http_session()
     try:
@@ -223,16 +217,14 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
     return None
 
 
-# ================= CACHE FONT =================
-CACHED_FONT_DATA = None
-
-async def get_crisp_font(size: int, bold: bool = False, session: aiohttp.ClientSession = None):
-    global CACHED_FONT_DATA
+# ================= FIX TRIỆT ĐỂ LOAD FONT KHÔNG BAO GIỜ TREO =================
+def get_safe_font(size: int):
     font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-        "arialbd.ttf" if bold else "arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "DejaVuSans.ttf",
+        "arial.ttf",
     ]
     for p in font_paths:
         if os.path.exists(p):
@@ -240,72 +232,43 @@ async def get_crisp_font(size: int, bold: bool = False, session: aiohttp.ClientS
                 return ImageFont.truetype(p, size)
             except Exception:
                 pass
-
-    if CACHED_FONT_DATA is None:
-        try:
-            close_session = False
-            if session is None or session.closed:
-                session = aiohttp.ClientSession()
-                close_session = True
-
-            url = (
-                "https://raw.githubusercontent.com/googlefonts/roboto/main/src/hinted/Roboto-Bold.ttf"
-                if bold else
-                "https://raw.githubusercontent.com/googlefonts/roboto/main/src/hinted/Roboto-Regular.ttf"
-            )
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
-                if r.status == 200:
-                    CACHED_FONT_DATA = await r.read()
-
-            if close_session:
-                await session.close()
-        except Exception:
-            pass
-
-    if CACHED_FONT_DATA:
-        try:
-            return ImageFont.truetype(io.BytesIO(CACHED_FONT_DATA), size)
-        except Exception:
-            pass
-
     return ImageFont.load_default()
 
 
-# ================= THẺ NHẠC NOW PLAYING CANVAS CARD =================
-async def generate_music_player_card(title: str, artist: str, duration_sec: int) -> io.BytesIO:
+# ================= THẺ NHẠC SYNC (AN TOÀN TUYỆT ĐỐI KHÔNG GÂY TREO) =================
+def render_music_card_sync(title: str, artist: str, duration_sec: int) -> io.BytesIO:
     W, H = 1000, 380
     img = Image.new("RGBA", (W, H), (15, 23, 42, 255))
     draw = ImageDraw.Draw(img)
 
-    f_badge  = await get_crisp_font(18, bold=True)
-    f_title  = await get_crisp_font(26, bold=True)
-    f_artist = await get_crisp_font(20, bold=False)
-    f_time   = await get_crisp_font(16, bold=True)
+    f_badge = get_safe_font(18)
+    f_title = get_safe_font(26)
+    f_artist = get_safe_font(20)
+    f_time = get_safe_font(16)
 
     pad = 20
     draw.rounded_rectangle([pad, pad, W - pad, H - pad], radius=22, fill=(24, 32, 56, 255), outline=(56, 189, 248, 160), width=2)
-
     draw.rounded_rectangle([pad + 30, pad + 25, pad + 190, pad + 65], radius=10, fill=(14, 165, 233, 230))
     draw.text((pad + 45, pad + 35), "▶ NOW PLAYING", fill=(255, 255, 255), font=f_badge)
 
     disp_title = truncate_text(title, 42)
     disp_artist = truncate_text(artist, 40)
-    draw.text((pad + 35, pad + 90), disp_title, fill=(255, 255, 255), font=f_title)
-    draw.text((pad + 35, pad + 135), f"👤 {disp_artist}", fill=(148, 163, 184), font=f_artist)
+    draw.text((pad + 35, pad + 85), disp_title, fill=(255, 255, 255), font=f_title)
+    draw.text((pad + 35, pad + 130), f"👤 {disp_artist}", fill=(148, 163, 184), font=f_artist)
 
-    # Hiệu ứng sóng âm giả lập (Sound Waves)
+    # Hiệu ứng sóng âm
     wave_x = pad + 35
-    wave_y = pad + 200
-    wave_bars = 48
+    wave_y = pad + 195
+    wave_bars = 46
     bar_width = 12
-    gap = 7
+    gap = 8
     for i in range(wave_bars):
-        h_val = int(20 + 35 * abs(math.sin(i * 0.45)))
+        h_val = int(18 + 32 * abs(math.sin(i * 0.45)))
         bx = wave_x + i * (bar_width + gap)
-        draw.rounded_rectangle([bx, wave_y - h_val, bx + bar_width, wave_y + h_val], radius=4, fill=(56, 189, 248, 210))
+        draw.rounded_rectangle([bx, wave_y - h_val, bx + bar_width, wave_y + h_val], radius=4, fill=(56, 189, 248, 220))
 
-    # Thanh tiến trình bài hát (Progress Bar)
-    pb_y = pad + 270
+    # Thanh thời lượng
+    pb_y = pad + 265
     pb_w = W - 2 * pad - 70
     draw.rounded_rectangle([pad + 35, pb_y, pad + 35 + pb_w, pb_y + 10], radius=5, fill=(51, 65, 85))
     prog_w = int(pb_w * 0.65)
@@ -313,12 +276,12 @@ async def generate_music_player_card(title: str, artist: str, duration_sec: int)
     draw.ellipse([pad + 35 + prog_w - 7, pb_y - 3, pad + 35 + prog_w + 9, pb_y + 13], fill=(255, 255, 255))
 
     mins, secs = divmod(duration_sec, 60)
-    total_str = f"{mins:02d}:{secs:02d}" if duration_sec else "HQ Audio"
+    total_str = f"{mins:02d}:{secs:02d}" if duration_sec else "Audio HQ"
     curr_mins, curr_secs = divmod(int(duration_sec * 0.65), 60)
     curr_str = f"{curr_mins:02d}:{curr_secs:02d}" if duration_sec else "01:45"
 
     draw.text((pad + 35, pb_y + 18), curr_str, fill=(148, 163, 184), font=f_time)
-    draw.text((pad + 35 + pb_w - 45, pb_y + 18), total_str, fill=(148, 163, 184), font=f_time)
+    draw.text((pad + 35 + pb_w - 55, pb_y + 18), total_str, fill=(148, 163, 184), font=f_time)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -361,13 +324,13 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
     img = Image.new("RGBA", (W, H), (15, 23, 42, 255))
     draw = ImageDraw.Draw(img)
 
-    f_title = await get_crisp_font(26, bold=True, session=session)
-    f_badge = await get_crisp_font(18, bold=True, session=session)
-    f_head  = await get_crisp_font(21, bold=True, session=session)
-    f_key   = await get_crisp_font(18, bold=False, session=session)
-    f_val   = await get_crisp_font(18, bold=True, session=session)
-    f_bar   = await get_crisp_font(15, bold=True, session=session)
-    f_foot  = await get_crisp_font(16, bold=False, session=session)
+    f_title = get_safe_font(26)
+    f_badge = get_safe_font(18)
+    f_head  = get_safe_font(21)
+    f_key   = get_safe_font(18)
+    f_val   = get_safe_font(18)
+    f_bar   = get_safe_font(15)
+    f_foot  = get_safe_font(16)
 
     if close_session:
         await session.close()
@@ -428,7 +391,7 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
         ("TikTok Video & Ảnh:", "Tải mượt mà (Full HD) ✅", (74, 222, 128)),
         ("YouTube Âm nhạc:", "Sẵn sàng phát nhạc ✅", (74, 222, 128)),
         ("Hệ thống Tách Nhạc:", "Hoạt động tốt ✅", (147, 197, 253)),
-        ("Chống Spam & Queue:", "Đang kích hoạt (Max 2 Q) ✅", (74, 222, 128)),
+        ("Chống Treo & Timeout:", "Đã kích hoạt Socket Fix ✅", (74, 222, 128)),
         ("Tự động Dọn Rác:", "Chạy ngầm (Mỗi 30p) 🧹", (226, 232, 240)),
     ]
 
@@ -478,7 +441,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
     }
 
     try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 html_data = await resp.text()
                 match = re.search(r"var ytInitialData\s*=\s*({.+?});</script>", html_data)
@@ -530,6 +493,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
             "default_search": f"ytsearch{max_results}",
             "skip_download": True,
             "no_cache_dir": True,
+            "socket_timeout": 10,
             "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
         }
         if COOKIE_FILE_PATH:
@@ -560,29 +524,30 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-# ================= TẢI AUDIO TỐI ƯU DUNG LƯỢNG =================
+# ================= TẢI AUDIO CÓ SOCKET TIMEOUT CHỐNG KẸT =================
 def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[io.BytesIO | None, dict]:
     clean_temp_storage_files()
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     tmp_dir = tempfile.gettempdir()
-    output_template = os.path.join(tmp_dir, f"ytdl_{video_id}_%(id)s.%(ext)s")
+    base_target = os.path.join(tmp_dir, f"ytdl_{video_id}")
+    output_template = f"{base_target}.%(ext)s"
 
     client_strategies = [
-        ["android", "ios"],
-        ["tv", "mweb"],
+        ["android"],
+        ["mweb", "tv"],
     ]
-
-    format_priority = "ba[abr<=96]/ba[abr<=128]/bestaudio[ext=m4a]/bestaudio/best"
 
     for clients in client_strategies:
         ydl_opts = {
-            "format": format_priority,
+            "format": "ba[abr<=96]/ba[abr<=128]/bestaudio/b",
             "outtmpl": output_template,
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
             "no_cache_dir": True,
+            "socket_timeout": 15,          # Ngắt ngay nếu mạng kẹt quá 15s
+            "retries": 2,
             "max_filesize": 48 * 1024 * 1024,
             "extractor_args": {
                 "youtube": {
@@ -613,7 +578,7 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                 }
 
                 for fname in os.listdir(tmp_dir):
-                    if fname.startswith(f"ytdl_{video_id}"):
+                    if fname.startswith(f"ytdl_{video_id}") and not fname.endswith(".part"):
                         downloaded_file = os.path.join(tmp_dir, fname)
                         break
 
@@ -634,14 +599,16 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                 except Exception:
                     pass
 
+    # SoundCloud Fallback nếu YouTube chặn IP Server
     if search_query:
         logger.info(f"Kích hoạt SoundCloud fallback: {search_query}")
-        sc_template = os.path.join(tmp_dir, f"sc_{video_id}_%(id)s.%(ext)s")
+        sc_template = os.path.join(tmp_dir, f"sc_{video_id}.%(ext)s")
         sc_opts = {
             "format": "bestaudio/best",
             "outtmpl": sc_template,
             "quiet": True,
             "no_cache_dir": True,
+            "socket_timeout": 15,
             "default_search": "scsearch1",
             "max_filesize": 45 * 1024 * 1024,
         }
@@ -660,7 +627,7 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                 }
 
                 for fname in os.listdir(tmp_dir):
-                    if fname.startswith(f"sc_{video_id}"):
+                    if fname.startswith(f"sc_{video_id}") and not fname.endswith(".part"):
                         sc_downloaded = os.path.join(tmp_dir, fname)
                         break
 
@@ -1242,7 +1209,7 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
         f"• 🧹 <b>Dọn rác đĩa & RAM (delay 5s):</b> <code>/cleanup</code>\n"
         f"• 📊 <b>Status Máy Chủ:</b> <code>/status</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"🛡️ <i>Chế độ bảo vệ tài nguyên & Hàng đợi thông minh đang bật.</i>"
+        f"🛡️ <i>Chế độ bảo vệ tài nguyên & Socket Fix đang kích hoạt.</i>"
     )
 
     keyboard = [
@@ -1395,7 +1362,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/sing &lt;tên bài hát hoặc từ khóa&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/sing tắt đèn đi</code>\n"
-            "• Kèm <b>Thẻ nhạc Now Playing Card Canvas</b> & Hàng đợi tải tối ưu."
+            "• Kèm <b>Thẻ nhạc Now Playing Card</b> & Hàng đợi tải tối ưu."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1554,7 +1521,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ================= CALLBACK TẢI AUDIO YOUTUBE KÈM HÀNG ĐỢI & THẺ CARD =================
+# ================= CALLBACK TẢI AUDIO KHÔNG BAO GIỜ TREO =================
 async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global WAITING_COUNT
     query = update.callback_query
@@ -1565,46 +1532,66 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
     target_url = f"https://www.youtube.com/watch?v={vid_id}"
     saved_kw = context.bot_data.get(f"kw_{query.message.chat_id}", "")
 
-    # Quản lý hàng đợi (Queue System)
     WAITING_COUNT += 1
     loading_msg = await query.message.reply_text(
-        f"⏳ <i>Yêu cầu đã vào hàng đợi (Vị trí: {WAITING_COUNT})... Vui lòng chờ!</i>",
+        f"⏳ <i>Yêu cầu tải đã vào luồng (Hàng đợi: {WAITING_COUNT})...</i>",
         parse_mode=ParseMode.HTML
     )
 
-    async with DOWNLOAD_SEMAPHORE:
-        WAITING_COUNT -= 1
-        await loading_msg.edit_text("⏳ <i>Đang bóc tách audio & render thẻ phát nhạc...</i>", parse_mode=ParseMode.HTML)
+    try:
+        async with DOWNLOAD_SEMAPHORE:
+            WAITING_COUNT = max(0, WAITING_COUNT - 1)
+            await loading_msg.edit_text("⏳ <i>Đang bóc tách audio & chuẩn bị truyền tải...</i>", parse_mode=ParseMode.HTML)
 
-        loop = asyncio.get_running_loop()
-        stream_file, details = await loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw)
+            loop = asyncio.get_running_loop()
 
-        if not stream_file:
-            await loading_msg.edit_text("❌ Không thể tải được bài hát này hoặc vượt quá dung lượng cho phép. Hãy chọn bài khác!")
-            return
+            # Giới hạn timeout 40s tuyệt đối để tránh treo luồng
+            try:
+                stream_file, details = await asyncio.wait_for(
+                    loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw),
+                    timeout=40.0
+                )
+            except asyncio.TimeoutError:
+                await loading_msg.edit_text("❌ <b>Quá thời gian tải:</b> YouTube phản hồi quá chậm, vui lòng thử lại!")
+                return
 
-        title = html.escape(details.get("title", "YouTube Track"))
-        uploader = html.escape(details.get("uploader", "YouTube Artist"))
-        dur_sec = details.get("duration", 0)
+            if not stream_file:
+                await loading_msg.edit_text("❌ Không thể tải được bài hát này hoặc bị chặn bản quyền. Hãy chọn bài khác!")
+                return
 
-        # Tạo thẻ bài hát Canvas
-        card_buf = await generate_music_player_card(title=details.get("title", "YouTube Track"), artist=details.get("uploader", "YouTube Artist"), duration_sec=dur_sec)
+            title = html.escape(details.get("title", "YouTube Track"))
+            uploader = html.escape(details.get("uploader", "YouTube Artist"))
+            dur_sec = details.get("duration", 0)
 
-        await loading_msg.delete()
+            # Thử render thẻ phát nhạc đồng bộ, nếu lỗi bỏ qua luôn để không làm treo
+            card_buf = None
+            try:
+                card_buf = render_music_card_sync(
+                    title=details.get("title", "YouTube Track"),
+                    artist=details.get("uploader", "YouTube Artist"),
+                    duration_sec=dur_sec
+                )
+            except Exception as card_err:
+                logger.warning(f"Bỏ qua render thẻ phát nhạc: {card_err}")
 
-        caption = (
-            f"╔══════════ 🎶 <b>AUDIO TRACK</b> ══════════╗\n"
-            f"║ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
-            f"║ 👤 <b>Nghệ sĩ/Kênh:</b> {uploader}\n"
-            f"║ 🛡️ <b>Tối ưu:</b> Tự động nén chống tràn đĩa\n"
-            f"║ 🔗 <b>Nguồn gốc:</b> <a href='{target_url}'>Media Source</a>\n"
-            f"╚════════════════════════════════════╝"
-        )
+            await loading_msg.delete()
 
-        try:
-            # Gửi thẻ ảnh Now Playing trước
-            await query.message.reply_photo(photo=card_buf, caption=f"🎧 <i>Đang phát:</i> <b>{title}</b>", parse_mode=ParseMode.HTML)
-            # Gửi file âm thanh
+            caption = (
+                f"╔══════════ 🎶 <b>AUDIO TRACK</b> ══════════╗\n"
+                f"║ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
+                f"║ 👤 <b>Nghệ sĩ/Kênh:</b> {uploader}\n"
+                f"║ 🛡️ <b>Tối ưu:</b> Tự động nén chống tràn đĩa\n"
+                f"║ 🔗 <b>Nguồn gốc:</b> <a href='{target_url}'>Media Source</a>\n"
+                f"╚════════════════════════════════════╝"
+            )
+
+            # Nếu có thẻ ảnh thì gửi kèm thẻ ảnh, không thì gửi audio thẳng
+            if card_buf:
+                try:
+                    await query.message.reply_photo(photo=card_buf, caption=f"🎧 <i>Đang phát:</i> <b>{title}</b>", parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+
             await query.message.reply_audio(
                 audio=stream_file,
                 title=title,
@@ -1612,9 +1599,13 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
                 caption=truncate_text(caption, 1020),
                 parse_mode=ParseMode.HTML,
             )
-        except Exception as e:
-            logger.error(f"Lỗi gửi audio: {e}")
-            await query.message.reply_text("❌ Kích thước tệp âm thanh vượt quá giới hạn gửi của Telegram.")
+
+    except Exception as e:
+        logger.error(f"Lỗi callback tải audio: {e}")
+        try:
+            await loading_msg.edit_text("❌ Đã xảy ra lỗi trong quá trình xử lý âm thanh.")
+        except Exception:
+            pass
 
 
 # ================= LỆNH /fb =================
@@ -1802,7 +1793,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
             )
         else:
-            await query.message.reply_audio(
+            await update.message.reply_audio(
                 audio=music_url,
                 title=music_title,
                 performer=music_author,
@@ -1972,7 +1963,6 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).post_shutdown(close_http_session).build()
 
-    # Khởi chạy Background Job: Tự động dọn rác và quét dung lượng mỗi 30 phút (1800 giây)
     if app.job_queue:
         app.job_queue.run_repeating(auto_system_maintenance_job, interval=1800, first=30)
         logger.info("Đã kích hoạt tự động dọn rác nền mỗi 30 phút.")
