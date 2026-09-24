@@ -708,7 +708,7 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
     return None, {}
 
 
-# ================= LOGIC FACEBOOK PRO (GIAO DIỆN CŨ CHUẨN) =================
+# ================= LOGIC FACEBOOK PRO (ĐÃ FIX TÌM UID BẰNG LINK & USERNAME) =================
 
 def estimate_fb_creation_details(uid: str) -> str:
     if not uid.isdigit():
@@ -767,32 +767,49 @@ def estimate_fb_creation_details(uid: str) -> str:
 async def get_fb_id(input_str: str) -> str | None:
     clean = input_str.strip()
 
+    # 1. Nhập trực tiếp UID dạng số
     if clean.isdigit():
         return clean
 
+    # 2. Link có chứa param id=1000...
     match_id = re.search(r"[?&]id=(\d+)", clean)
     if match_id:
         return match_id.group(1)
 
-    direct_match = re.search(r"facebook\.com/(?:profile\.php\?id=)?(\d{4,})", clean)
+    # 3. Link profile có số sẵn
+    direct_match = re.search(r"facebook\.com/(?:profile\.php\?id=)?(\d{6,})", clean)
     if direct_match:
         return direct_match.group(1)
 
-    clean_url = clean.split("?")[0].rstrip("/")
+    # Chuẩn hóa link
+    target_link = clean
+    if not target_link.startswith("http://") and not target_link.startswith("https://"):
+        if "facebook.com" in target_link or "fb.com" in target_link:
+            target_link = f"https://{target_link}"
+        else:
+            target_link = f"https://www.facebook.com/{clean}"
+
+    session = await get_http_session()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+    }
+
+    clean_url = target_link.split("?")[0].rstrip("/")
     path_match = re.search(r"(?:facebook\.com|fb\.me|fb\.com)/([a-zA-Z0-9.]+)", clean_url)
     username = clean
     if path_match:
         extracted = path_match.group(1)
-        if extracted not in ["profile.php", "groups", "pages", "watch", "stories"]:
+        if extracted not in ["profile.php", "groups", "pages", "watch", "stories", "share"]:
             username = extracted
 
-    session = await get_http_session()
-
+    # API 1: Traodoisub
     try:
         async with session.post(
             "https://id.traodoisub.com/api.php",
-            data={"link": clean},
-            timeout=aiohttp.ClientTimeout(total=2.5),
+            data={"link": target_link},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=4.0),
         ) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
@@ -801,28 +818,49 @@ async def get_fb_id(input_str: str) -> str | None:
     except Exception:
         pass
 
+    # Scrape trực tiếp mbasic profile
     try:
-        async with session.get(
-            f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}",
-            timeout=aiohttp.ClientTimeout(total=2.5),
-        ) as resp:
-            if resp.status == 200:
-                j = await resp.json(content_type=None)
-                if j.get("id"):
-                    return str(j["id"])
+        m_url = f"https://mbasic.facebook.com/{username}"
+        async with session.get(m_url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=4.0)) as r:
+            if r.status == 200:
+                html_body = await r.text()
+                m_uid = re.search(r'name="target" value="(\d+)"', html_body)
+                if not m_uid:
+                    m_uid = re.search(r'"entity_id":"(\d+)"', html_body)
+                if not m_uid:
+                    m_uid = re.search(r'fb://profile/(\d+)', html_body)
+                if not m_uid:
+                    m_uid = re.search(r'"userID":"(\d+)"', html_body)
+                if m_uid:
+                    return str(m_uid.group(1))
     except Exception:
         pass
 
+    # API 2: Graph Facebook (Token)
     for token in FB_TOKENS:
         try:
             url = f"https://graph.facebook.com/{username}?fields=id&access_token={token}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:
                 if resp.status == 200:
                     j = await resp.json(content_type=None)
                     if "id" in j:
                         return str(j["id"])
         except Exception:
             pass
+
+    # API 3: FFB VN
+    try:
+        async with session.get(
+            f"https://ffb.vn/api/tool/get-id-fb?idfb={urllib.parse.quote(target_link)}",
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=4.0),
+        ) as resp:
+            if resp.status == 200:
+                j = await resp.json(content_type=None)
+                if j.get("id"):
+                    return str(j["id"])
+    except Exception:
+        pass
 
     return None
 
@@ -875,7 +913,7 @@ async def scrape_fb_full_details(uid: str) -> dict:
             f"https://m.facebook.com/profile.php?id={uid}",
         ]
         for url in urls:
-            async with session.get(url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=3.5)) as r:
+            async with session.get(url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=4.5)) as r:
                 if r.status == 200:
                     html_text = await r.text()
 
@@ -940,7 +978,7 @@ async def fetch_fb_info(uid: str) -> dict | None:
     for token in FB_TOKENS:
         try:
             url = f"https://graph.facebook.com/{uid}?fields={fields_target}&access_token={token}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=2.5)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:
                 res = await resp.json(content_type=None)
                 if res and "name" in res:
                     result["name"] = res.get("name")
@@ -985,7 +1023,7 @@ async def fetch_fb_info(uid: str) -> dict | None:
 
     if not result["name"]:
         try:
-            async with session.get(f"https://ffb.vn/api/tool/get-id-fb?idfb={uid}", timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
+            async with session.get(f"https://ffb.vn/api/tool/get-id-fb?idfb={uid}", timeout=aiohttp.ClientTimeout(total=2.5)) as resp:
                 if resp.status == 200:
                     j = await resp.json(content_type=None)
                     if j.get("name"):
@@ -1083,7 +1121,6 @@ async def resolve_tiktok_url(url: str) -> str:
 async def fetch_tiktok_media_fast(tiktok_url: str) -> dict | None:
     session = await get_http_session()
 
-    # 1. Gọi API TikWM với timeout 5s
     try:
         url = "https://www.tikwm.com/api/"
         post_data = {"url": tiktok_url, "hd": 1}
@@ -1110,7 +1147,6 @@ async def fetch_tiktok_media_fast(tiktok_url: str) -> dict | None:
     except Exception:
         pass
 
-    # 2. Gọi Fallback LoveTik với timeout 5s
     try:
         api_url = "https://lovetik.com/api/ajax/search"
         async with session.post(api_url, data={"query": tiktok_url}, timeout=aiohttp.ClientTimeout(total=5)) as resp:
@@ -1140,7 +1176,6 @@ async def fetch_tiktok_media_fast(tiktok_url: str) -> dict | None:
     except Exception:
         pass
 
-    # 3. Native yt-dlp Extractor
     def _ytdlp_extract():
         ydl_opts = {
             "quiet": True,
@@ -1517,7 +1552,7 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_panel = (
             f"╔════════ ⚠️ <b>THIẾU THAM SỐ</b> ════════╗\n"
             f"║ 📌 <b>Cú pháp:</b> <code>/fb &lt;link_hoặc_uid&gt;</code>\n"
-            f"║ 💡 <i>Ví dụ: <code>/fb 4</code> hoặc <code>/fb https://facebook.com/...</code></i>\n"
+            f"║ 💡 <i>Ví dụ: <code>/fb 4</code> hoặc <code>/fb https://facebook.com/zuck</code></i>\n"
             f"╚════════════════════════════════════╝"
         )
         try:
@@ -1532,14 +1567,14 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("⏳ <i>Đang bóc tách dữ liệu UID Facebook...</i>", parse_mode=ParseMode.HTML)
 
     try:
-        uid = await asyncio.wait_for(get_fb_id(input_data), timeout=4.0)
+        uid = await asyncio.wait_for(get_fb_id(input_data), timeout=12.0)
         if not uid:
             elapsed = time.perf_counter() - t0
-            await status_msg.edit_text(f"❌ Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!\n⚡ Tốc độ: <b>{elapsed:.2f}s</b>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"❌ Không thể tìm thấy UID từ link/username này. Hãy kiểm tra lại link!\n⚡ Tốc độ: <b>{elapsed:.2f}s</b>", parse_mode=ParseMode.HTML)
             return
 
         await status_msg.edit_text(f"📡 <i>Đang quét dữ liệu OSINT cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
-        data = await asyncio.wait_for(fetch_fb_info(uid), timeout=5.0)
+        data = await asyncio.wait_for(fetch_fb_info(uid), timeout=10.0)
 
         if not data:
             elapsed = time.perf_counter() - t0
@@ -1561,13 +1596,7 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except asyncio.TimeoutError:
         elapsed = time.perf_counter() - t0
-        clean_input = input_data.strip()
-        uid_fb = clean_input if clean_input.isdigit() else "4"
-        fallback_data = await fetch_fb_info(uid_fb)
-        report, avatar_url = format_fb_info_panel(fallback_data)
-        report += f"\n⚡ Tốc độ xử lý: <b>{elapsed:.2f}s</b>"
-        await status_msg.delete()
-        await update.message.reply_photo(photo=avatar_url, caption=report, parse_mode=ParseMode.HTML)
+        await status_msg.edit_text(f"⏱️ <b>Hết thời gian chờ:</b> Hệ thống tra cứu phản hồi quá chậm, vui lòng thử lại sau!\n⚡ Tốc độ: <b>{elapsed:.2f}s</b>", parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Lỗi lệnh FB: {e}")
         elapsed = time.perf_counter() - t0
@@ -2032,7 +2061,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             keyboard.append([InlineKeyboardButton("🎵 Tải nhạc MP3 của video", callback_data=f"dlmusic_{video_id}")])
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
-        # Bài viết dạng ảnh
         if data.get("images"):
             await msg.delete()
             all_images = data["images"]
@@ -2096,7 +2124,6 @@ def main():
         app.job_queue.run_repeating(auto_system_maintenance_job, interval=1800, first=30)
         logger.info("Đã kích hoạt tự động dọn rác nền và cảnh báo Admin 8297032840.")
 
-    # Đăng ký Command Handlers
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
@@ -2107,12 +2134,10 @@ def main():
     app.add_handler(CommandHandler("downmusic", cmd_music))
     app.add_handler(CommandHandler("fb", cmd_fb))
 
-    # Đăng ký Callback Handlers
     app.add_handler(CallbackQueryHandler(handle_youtube_download_callback, pattern="^ytdl_"))
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
     app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
 
-    # Đăng ký Message Handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
     app.run_polling()
