@@ -1,3 +1,4 @@
+Toàn bộ file code hoàn chỉnh sau khi đã ghép các bản vá bóc tách UID từ link/username, xử lý URL Facebook đầy đủ và nâng timeout chống lỗi:
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -2145,3 +2146,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
