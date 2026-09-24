@@ -9,6 +9,7 @@ import html
 import io
 import json
 import logging
+import math
 import os
 import platform
 import re
@@ -38,13 +39,12 @@ import yt_dlp
 
 BOT_START_TIME = time.time()
 
-# ================= CẤU HÌNH TOKEN & API =================
+# ================= CẤU HÌNH TOKEN, ADMIN & API =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98").strip()
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0").strip() or 0)
 ALLOWED_USERS = []
 
 FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
-
-# Hỗ trợ truyền cookies.txt qua biến môi trường để vượt bản quyền YouTube
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
 COOKIE_FILE_PATH = None
 
@@ -95,6 +95,22 @@ logger = logging.getLogger("MultiToolBot")
 
 HTTP_SESSION: aiohttp.ClientSession | None = None
 
+# ================= QUẢN LÝ RATE LIMIT & HÀNG ĐỢI (QUEUE SYSTEM) =================
+USER_LAST_ACTION: dict[int, float] = {}
+RATE_LIMIT_SECONDS = 8
+DOWNLOAD_SEMAPHORE = asyncio.Semaphore(2)  # Tối đa 2 tải nặng đồng thời
+WAITING_COUNT = 0
+
+
+def check_rate_limit(user_id: int) -> tuple[bool, int]:
+    now = time.time()
+    last = USER_LAST_ACTION.get(user_id, 0)
+    diff = now - last
+    if diff < RATE_LIMIT_SECONDS:
+        return False, int(RATE_LIMIT_SECONDS - diff)
+    USER_LAST_ACTION[user_id] = now
+    return True, 0
+
 
 def is_authorized(user_id: int) -> bool:
     if not ALLOWED_USERS:
@@ -132,7 +148,6 @@ def ensure_full_url(url: str) -> str:
     return url
 
 
-# ================= HÀM TIỆN ÍCH DỌN RÁC Ổ CỨNG VÀ BỘ NHỚ =================
 def clean_temp_storage_files():
     tmp_dir = tempfile.gettempdir()
     deleted_count = 0
@@ -152,6 +167,32 @@ def clean_temp_storage_files():
     except Exception as e:
         logger.warning(f"Lỗi dọn dẹp file tạm: {e}")
     return deleted_count, freed_bytes
+
+
+# ================= CRON JOB: TỰ ĐỘNG DỌN RÁC & CẢNH BÁO ADMIN =================
+async def auto_system_maintenance_job(context: ContextTypes.DEFAULT_TYPE):
+    """Chạy ngầm định kỳ mỗi 30 phút: Dọn cache, RAM và kiểm tra ngưỡng an toàn."""
+    gc.collect()
+    loop = asyncio.get_running_loop()
+    del_count, freed_bytes = await loop.run_in_executor(None, clean_temp_storage_files)
+    freed_mb = round(freed_bytes / (1024 * 1024), 2)
+
+    total, used, free = shutil.disk_usage("/")
+    free_mb = round(free / (1024 * 1024), 2)
+
+    logger.info(f"[Auto-Cron] Đã giải phóng {freed_mb} MB ({del_count} tệp). Trống: {free_mb} MB.")
+
+    if free_mb < 500 and ADMIN_ID:
+        alert_text = (
+            f"🚨 <b>CẢNH BÁO NGUY CẤP DUNG LƯỢNG MÁY CHỦ!</b>\n"
+            f"<code>────────────────────────────</code>\n"
+            f"⚠️ Bộ nhớ trống hiện tại chỉ còn: <b>{free_mb} MB</b>!\n"
+            f"Bot đang thực hiện ép dọn dẹp khẩn cấp. Hãy mở rộng dung lượng host."
+        )
+        try:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=alert_text, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.error(f"Không thể gửi thông báo tới admin: {e}")
 
 
 # ================= HỖ TRỢ STREAM BUFFER =================
@@ -182,7 +223,7 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
     return None
 
 
-# ================= CACHE FONT & TỰ ĐỘNG TẢI NẾU THIẾU =================
+# ================= CACHE FONT =================
 CACHED_FONT_DATA = None
 
 async def get_crisp_font(size: int, bold: bool = False, session: aiohttp.ClientSession = None):
@@ -230,6 +271,62 @@ async def get_crisp_font(size: int, bold: bool = False, session: aiohttp.ClientS
     return ImageFont.load_default()
 
 
+# ================= THẺ NHẠC NOW PLAYING CANVAS CARD (UI 4) =================
+async def generate_music_player_card(title: str, artist: str, duration_sec: int) -> io.BytesIO:
+    W, H = 1000, 380
+    img = Image.new("RGBA", (W, H), (15, 23, 42, 255))
+    draw = ImageDraw.Draw(img)
+
+    f_badge  = await get_crisp_font(18, bold=True)
+    f_title  = await get_crisp_font(26, bold=True)
+    f_artist = await get_crisp_font(20, bold=False)
+    f_time   = await get_crisp_font(16, bold=True)
+
+    pad = 20
+    draw.rounded_rectangle([pad, pad, W - pad, H - pad], radius=22, fill=(24, 32, 56, 255), outline=(56, 189, 248, 160), width=2)
+
+    draw.rounded_rectangle([pad + 30, pad + 25, pad + 190, pad + 65], radius=10, fill=(14, 165, 233, 230))
+    draw.text((pad + 45, pad + 35), "▶ NOW PLAYING", fill=(255, 255, 255), font=f_badge)
+
+    disp_title = truncate_text(title, 42)
+    disp_artist = truncate_text(artist, 40)
+    draw.text((pad + 35, pad + 90), disp_title, fill=(255, 255, 255), font=f_title)
+    draw.text((pad + 35, pad + 135), f"👤 {disp_artist}", fill=(148, 163, 184), font=f_artist)
+
+    # Hiệu ứng sóng âm giả lập (Sound Waves)
+    wave_x = pad + 35
+    wave_y = pad + 200
+    wave_bars = 48
+    bar_width = 12
+    gap = 7
+    for i in range(wave_bars):
+        h_val = int(20 + 35 * abs(math.sin(i * 0.45)))
+        bx = wave_x + i * (bar_width + gap)
+        draw.rounded_rectangle([bx, wave_y - h_val, bx + bar_width, wave_y + h_val], radius=4, fill=(56, 189, 248, 210))
+
+    # Thanh tiến trình bài hát (Progress Bar)
+    pb_y = pad + 270
+    pb_w = W - 2 * pad - 70
+    draw.rounded_rectangle([pad + 35, pb_y, pad + 35 + pb_w, pb_y + 10], radius=5, fill=(51, 65, 85))
+    prog_w = int(pb_w * 0.65)
+    draw.rounded_rectangle([pad + 35, pb_y, pad + 35 + prog_w, pb_y + 10], radius=5, fill=(34, 197, 94))
+    draw.ellipse([pad + 35 + prog_w - 7, pb_y - 3, pad + 35 + prog_w + 9, pb_y + 13], fill=(255, 255, 255))
+
+    mins, secs = divmod(duration_sec, 60)
+    total_str = f"{mins:02d}:{secs:02d}" if duration_sec else "HQ Audio"
+    curr_mins, curr_secs = divmod(int(duration_sec * 0.65), 60)
+    curr_str = f"{curr_mins:02d}:{curr_secs:02d}" if duration_sec else "01:45"
+
+    draw.text((pad + 35, pb_y + 18), curr_str, fill=(148, 163, 184), font=f_time)
+    draw.text((pad + 35 + pb_w - 45, pb_y + 18), total_str, fill=(148, 163, 184), font=f_time)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    buf.name = "now_playing.png"
+    return buf
+
+
 # ================= HÀM TẠO ẢNH CANVAS STATUS =================
 async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, session: aiohttp.ClientSession = None) -> io.BytesIO:
     uptime_sec = int(time.time() - bot_start_time)
@@ -257,7 +354,6 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
         except Exception:
             ram_mb = 52.3
 
-    # Lấy thông số ổ cứng
     total, used, free = shutil.disk_usage("/")
     free_gb = round(free / (1024 ** 3), 2)
 
@@ -327,14 +423,13 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
         ("Hạ tầng chạy:", "Railway Cloud Engine", (192, 132, 252)),
     ]
 
-    # Các dịch vụ được thay tên rõ ràng, kín đáo
     c2_data = [
         ("Facebook:", "Hoạt động ổn định ✅", (74, 222, 128)),
         ("TikTok Video & Ảnh:", "Tải mượt mà (Full HD) ✅", (74, 222, 128)),
         ("YouTube Âm nhạc:", "Sẵn sàng phát nhạc ✅", (74, 222, 128)),
         ("Hệ thống Tách Nhạc:", "Hoạt động tốt ✅", (147, 197, 253)),
-        ("Bộ lọc Chống Tràn Đĩa:", "Đang kích hoạt ✅", (74, 222, 128)),
-        ("Tự động Dọn Rác:", "Sẵn sàng (/cleanup) 🧹", (226, 232, 240)),
+        ("Chống Spam & Queue:", "Đang kích hoạt (Max 2 Q) ✅", (74, 222, 128)),
+        ("Tự động Dọn Rác:", "Chạy ngầm (Mỗi 30p) 🧹", (226, 232, 240)),
     ]
 
     y_start = card_y1 + 80
@@ -465,7 +560,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-# ================= TẢI AUDIO TỐI ƯU DUNG LƯỢNG (CHỐNG TRÀN ĐĨA) =================
+# ================= TẢI AUDIO TỐI ƯU DUNG LƯỢNG =================
 def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[io.BytesIO | None, dict]:
     clean_temp_storage_files()
 
@@ -1147,7 +1242,7 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
         f"• 🧹 <b>Dọn rác đĩa & RAM (delay 5s):</b> <code>/cleanup</code>\n"
         f"• 📊 <b>Status Máy Chủ:</b> <code>/status</code>\n"
         f"<code>────────────────────────────</code>\n"
-        f"🟢 <b>Status:</b> <i>Railway Container Engine Online</i>"
+        f"🛡️ <i>Chế độ bảo vệ tài nguyên & Hàng đợi thông minh đang bật.</i>"
     )
 
     keyboard = [
@@ -1258,7 +1353,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 <b>BÁO CÁO THỐNG KÊ MÁY CHỦ (CANVAS LIVE)</b>\n"
         "<code>────────────────────────────</code>\n"
         "• Hệ thống giám sát trực tiếp trên Railway Cloud.\n"
-        "• Thông số tài nguyên được làm mới theo thời gian thực."
+        "• Tự động dọn rác nền kích hoạt mỗi 30 phút."
     )
 
     await status_msg.delete()
@@ -1300,7 +1395,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "<code>────────────────────────────</code>\n"
             "• Cú pháp: <code>/sing &lt;tên bài hát hoặc từ khóa&gt;</code>\n"
             "• <i>Ví dụ:</i> <code>/sing tắt đèn đi</code>\n"
-            "• Cơ chế chống đầy bộ nhớ tự động kích hoạt."
+            "• Kèm <b>Thẻ nhạc Now Playing Card Canvas</b> & Hàng đợi tải tối ưu."
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1369,7 +1464,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
             "📊 <b>BÁO CÁO THỐNG KÊ MÁY CHỦ (CANVAS LIVE)</b>\n"
             "<code>────────────────────────────</code>\n"
             "• Hệ thống giám sát trực tiếp trên Railway Cloud.\n"
-            "• Thông số tài nguyên được làm mới theo thời gian thực."
+            "• Tự động dọn rác nền kích hoạt mỗi 30 phút."
         )
 
         try:
@@ -1390,6 +1485,11 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 # ================= XỬ LÝ LỆNH /sing =================
 async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
+        return
+
+    ok, wait = check_rate_limit(update.effective_user.id)
+    if not ok:
+        await update.message.reply_text(f"⏱️ <i>Bạn thao tác quá nhanh. Vui lòng thử lại sau {wait}s nữa!</i>", parse_mode=ParseMode.HTML)
         return
 
     if not context.args:
@@ -1454,59 +1554,77 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ================= CALLBACK TẢI AUDIO YOUTUBE (TỰ ĐỘNG CHỐNG TRÀN ĐĨA) =================
+# ================= CALLBACK TẢI AUDIO YOUTUBE KÈM HÀNG ĐỢI & THẺ CARD =================
 async def handle_youtube_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global WAITING_COUNT
     query = update.callback_query
-    await query.answer("⏳ Đang xử lý âm thanh...", show_alert=False)
+    await query.answer()
     data = query.data
 
     vid_id = data.replace("ytdl_", "")
     target_url = f"https://www.youtube.com/watch?v={vid_id}"
-
     saved_kw = context.bot_data.get(f"kw_{query.message.chat_id}", "")
 
+    # Quản lý hàng đợi (Queue System)
+    WAITING_COUNT += 1
     loading_msg = await query.message.reply_text(
-        "⏳ <i>Đang bóc tách audio (Tự động nén tối ưu dung lượng)...</i>",
+        f"⏳ <i>Yêu cầu đã vào hàng đợi (Vị trí: {WAITING_COUNT})... Vui lòng chờ!</i>",
         parse_mode=ParseMode.HTML
     )
 
-    loop = asyncio.get_running_loop()
-    stream_file, details = await loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw)
+    async with DOWNLOAD_SEMAPHORE:
+        WAITING_COUNT -= 1
+        await loading_msg.edit_text("⏳ <i>Đang bóc tách audio & render thẻ phát nhạc...</i>", parse_mode=ParseMode.HTML)
 
-    await loading_msg.delete()
+        loop = asyncio.get_running_loop()
+        stream_file, details = await loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw)
 
-    if not stream_file:
-        await query.message.reply_text("❌ Không thể tải được bài hát này hoặc vượt quá dung lượng cho phép. Hãy chọn bài khác!")
-        return
+        if not stream_file:
+            await loading_msg.edit_text("❌ Không thể tải được bài hát này hoặc vượt quá dung lượng cho phép. Hãy chọn bài khác!")
+            return
 
-    title = html.escape(details.get("title", "YouTube Track"))
-    uploader = html.escape(details.get("uploader", "YouTube Artist"))
+        title = html.escape(details.get("title", "YouTube Track"))
+        uploader = html.escape(details.get("uploader", "YouTube Artist"))
+        dur_sec = details.get("duration", 0)
 
-    caption = (
-        f"╔══════════ 🎶 <b>AUDIO TRACK</b> ══════════╗\n"
-        f"║ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
-        f"║ 👤 <b>Nghệ sĩ/Kênh:</b> {uploader}\n"
-        f"║ 🛡️ <b>Tối ưu:</b> Tự động nén chống tràn đĩa\n"
-        f"║ 🔗 <b>Nguồn gốc:</b> <a href='{target_url}'>Media Source</a>\n"
-        f"╚════════════════════════════════════╝"
-    )
+        # Tạo thẻ bài hát Canvas
+        card_buf = await generate_music_player_card(title=details.get("title", "YouTube Track"), artist=details.get("uploader", "YouTube Artist"), duration_sec=dur_sec)
 
-    try:
-        await query.message.reply_audio(
-            audio=stream_file,
-            title=title,
-            performer=uploader,
-            caption=truncate_text(caption, 1020),
-            parse_mode=ParseMode.HTML,
+        await loading_msg.delete()
+
+        caption = (
+            f"╔══════════ 🎶 <b>AUDIO TRACK</b> ══════════╗\n"
+            f"║ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
+            f"║ 👤 <b>Nghệ sĩ/Kênh:</b> {uploader}\n"
+            f"║ 🛡️ <b>Tối ưu:</b> Tự động nén chống tràn đĩa\n"
+            f"║ 🔗 <b>Nguồn gốc:</b> <a href='{target_url}'>Media Source</a>\n"
+            f"╚════════════════════════════════════╝"
         )
-    except Exception as e:
-        logger.error(f"Lỗi gửi audio: {e}")
-        await query.message.reply_text("❌ Kích thước tệp âm thanh vượt quá giới hạn gửi của Telegram.")
+
+        try:
+            # Gửi thẻ ảnh Now Playing trước
+            await query.message.reply_photo(photo=card_buf, caption=f"🎧 <i>Đang phát:</i> <b>{title}</b>", parse_mode=ParseMode.HTML)
+            # Gửi file âm thanh
+            await query.message.reply_audio(
+                audio=stream_file,
+                title=title,
+                performer=uploader,
+                caption=truncate_text(caption, 1020),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            logger.error(f"Lỗi gửi audio: {e}")
+            await query.message.reply_text("❌ Kích thước tệp âm thanh vượt quá giới hạn gửi của Telegram.")
 
 
 # ================= LỆNH /fb =================
 async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
+        return
+
+    ok, wait = check_rate_limit(update.effective_user.id)
+    if not ok:
+        await update.message.reply_text(f"⏱️ <i>Vui lòng đợi {wait}s trước khi gửi yêu cầu tiếp theo!</i>", parse_mode=ParseMode.HTML)
         return
 
     if not context.args:
@@ -1616,6 +1734,11 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
+    ok, wait = check_rate_limit(update.effective_user.id)
+    if not ok:
+        await update.message.reply_text(f"⏱️ <i>Vui lòng đợi {wait}s trước khi gửi tiếp!</i>", parse_mode=ParseMode.HTML)
+        return
+
     if not context.args:
         help_panel = (
             f"╔════════ ⚠️ <b>THIẾU ĐƯỜNG LINK</b> ════════╗\n"
@@ -1696,6 +1819,11 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
+    ok, wait = check_rate_limit(update.effective_user.id)
+    if not ok:
+        await update.message.reply_text(f"⏱️ <i>Vui lòng đợi {wait}s trước khi gửi tiếp!</i>", parse_mode=ParseMode.HTML)
+        return
+
     if not context.args:
         help_panel = (
             f"╔════════ ⚠️ <b>THIẾU THAM SỐ</b> ════════╗\n"
@@ -1734,17 +1862,21 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     text = update.message.text.strip()
 
     if "tiktok.com" in text:
+        ok, wait = check_rate_limit(update.effective_user.id)
+        if not ok:
+            await update.message.reply_text(f"⏱️ <i>Tải quá nhanh! Vui lòng chờ {wait}s trước khi dán link mới.</i>", parse_mode=ParseMode.HTML)
+            return
+
         match = re.search(r"https?://[^\s]+", text)
         if not match:
             return
         raw_url = match.group(0)
 
-        msg = await update.message.reply_text("⏳ <i>Đang tải dữ liệu HD...</i>", parse_mode=ParseMode.HTML)
+        msg = await update.message.reply_text("⏳ <i>Đang lấy dữ liệu HD từ TikTok...</i>", parse_mode=ParseMode.HTML)
 
         target_url = await resolve_tiktok_url(raw_url)
         data = await tikwm_req({"url": target_url, "hd": 1})
         if not data or data.get("code") != 0:
-            logger.warning("TikWM không phản hồi hoặc lỗi, dùng fallback LoveTik...")
             data = await fallback_tik_download(target_url)
 
         if not data or data.get("code") != 0 or not data.get("data"):
@@ -1831,14 +1963,19 @@ def main():
     terminal_banner = (
         "\n"
         "╔══════════════════════════════════════════════════════╗\n"
-        "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
+        "║            MULTI-PLATFORM TOOLKIT PRO                ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: YouTube Music + Canvas Server Status + TT  ║\n"
+        "║ Features: Auto Clean + Rate Limit + Music Card UI    ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
 
     app = Application.builder().token(BOT_TOKEN).post_shutdown(close_http_session).build()
+
+    # Khởi chạy Background Job: Tự động dọn rác và quét dung lượng mỗi 30 phút (1800 giây)
+    if app.job_queue:
+        app.job_queue.run_repeating(auto_system_maintenance_job, interval=1800, first=30)
+        logger.info("Đã kích hoạt tự động dọn rác nền mỗi 30 phút.")
 
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
