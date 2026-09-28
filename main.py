@@ -169,25 +169,30 @@ def clean_temp_storage_files():
     return deleted_count, freed_bytes
 
 
-# ================= HỖ TRỢ STREAM BUFFER =================
+# ================= HỖ TRỢ STREAM BUFFER (FIX CHẶN CDN) =================
 async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
     session = await get_http_session()
-    headers = {
-        **COMMON_HEADERS,
-        "Referer": "https://www.tiktok.com/",
+    stream_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.tikwm.com/",
+        "Accept": "*/*",
     }
     try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=45)) as resp:
-            if resp.status == 200:
-                content_len = resp.headers.get("Content-Length")
-                if content_len and int(content_len) > max_size_mb * 1024 * 1024:
-                    return None
-
+        async with session.get(
+            url,
+            headers=stream_headers,
+            allow_redirects=True,
+            timeout=aiohttp.ClientTimeout(total=60),
+        ) as resp:
+            if resp.status in (200, 206):
                 buf = io.BytesIO()
                 total_downloaded = 0
                 max_bytes = max_size_mb * 1024 * 1024
 
-                async for chunk in resp.content.iter_chunked(64 * 1024):
+                async for chunk in resp.content.iter_chunked(128 * 1024):
                     total_downloaded += len(chunk)
                     if total_downloaded > max_bytes:
                         return None
@@ -196,6 +201,8 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
                 buf.seek(0)
                 buf.name = "media.mp4"
                 return buf
+            else:
+                logger.warning(f"CDN từ chối kết nối (HTTP {resp.status}): {url}")
     except Exception as e:
         logger.error(f"Lỗi tải stream media: {e}")
     return None
@@ -396,7 +403,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
     headers = {
         **COMMON_HEADERS,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://www.youtube.",
+        "Referer": "https://www.youtube.com/",
     }
 
     try:
@@ -1293,7 +1300,7 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     return truncate_text(panel, 1020), avatar
 
 
-# ================= DASHBOARD WELCOME MỚI =================
+# ================= DASHBOARD WELCOME =================
 def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboardMarkup]:
     display_name = html.escape(user_name)
     panel = (
@@ -1886,7 +1893,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     raw_url = context.args[0].strip()
-    if "tiktok.com" not in raw_url:
+    if "tiktok.com" not in raw_url and "douyin.com" not in raw_url:
         await update.message.reply_text(f"⚠️ Vui lòng cung cấp link TikTok hợp lệ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
@@ -1984,14 +1991,14 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
-# ================= TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK =================
+# ================= TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK (FIXED THẢ VIDEO) =================
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
     text = update.message.text.strip()
 
-    if "tiktok.com" in text:
+    if "tiktok.com" in text or "douyin.com" in text:
         t0 = time.perf_counter()
         match = re.search(r"https?://[^\s]+", text)
         if not match:
@@ -2003,7 +2010,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         data = await get_tiktok_universal_data(raw_url)
 
         if not data or not data.get("data"):
-            await msg.edit_text(f"❌ <b>Tải thất bại:</b> Video đã bị xóa, tài khoản riêng tư hoặc link không hợp lệ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+            await msg.edit_text(f"❌ <b>Tải thất bại:</b> Video riêng tư, bị xoá hoặc link không hỗ trợ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
             return
 
         res = data["data"]
@@ -2032,7 +2039,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             keyboard.append([InlineKeyboardButton("🎵 Tải nhạc MP3 của video", callback_data=f"dlmusic_{video_id}")])
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
-        # Trường hợp bài đăng ảnh slide
+        # Bài đăng Album Slide
         if res.get("images"):
             await msg.delete()
             all_images = res["images"]
@@ -2049,39 +2056,60 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        raw_video_url = res.get("hdplay") or res.get("play")
+        # Lấy URL video: Ưu tiên link play không dính watermark
+        raw_video_url = res.get("play") or res.get("hdplay")
         video_url = ensure_full_url(raw_video_url)
 
         if not video_url:
-            await msg.edit_text(f"❌ Không trích xuất được link video chất lượng cao.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+            await msg.edit_text(f"❌ Không trích xuất được link tải video.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
             return
 
-        stream_video = await download_file_stream(video_url, max_size_mb=50)
+        # Tải file về buffer RAM để Telegram gửi đi (tránh bị Telegram chặn URL CDN)
+        stream_video = await download_file_stream(video_url, max_size_mb=48)
+
+        # Fallback khẩn cấp nếu API CDN bị chặn IP: Dùng yt-dlp tải thẳng file local
+        if not stream_video:
+            def _ytdlp_direct_dl(u):
+                tmp = tempfile.gettempdir()
+                out_path = os.path.join(tmp, f"tik_{int(time.time())}.mp4")
+                opts = {
+                    "format": "best",
+                    "outtmpl": out_path,
+                    "quiet": True,
+                    "no_warnings": True,
+                }
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([u])
+                if os.path.exists(out_path):
+                    with open(out_path, "rb") as f:
+                        b = io.BytesIO(f.read())
+                    b.seek(0)
+                    b.name = "tiktok.mp4"
+                    os.remove(out_path)
+                    return b
+                return None
+
+            loop = asyncio.get_running_loop()
+            stream_video = await loop.run_in_executor(None, _ytdlp_direct_dl, raw_url)
+
         await msg.delete()
 
-        try:
-            if stream_video:
-                stream_video.name = f"{video_id or 'tiktok'}_hd.mp4"
+        if stream_video:
+            try:
                 await update.message.reply_video(
                     video=stream_video,
                     caption=caption_clean,
                     parse_mode=ParseMode.HTML,
                     reply_markup=reply_markup,
-                    read_timeout=120,
-                    write_timeout=120,
+                    supports_streaming=True,
+                    read_timeout=90,
+                    write_timeout=90,
                 )
-            else:
-                await update.message.reply_video(
-                    video=video_url,
-                    caption=caption_clean,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=reply_markup,
-                    read_timeout=120,
-                    write_timeout=120,
-                )
-        except Exception as e:
-            logger.error(f"Lỗi gửi video: {e}")
-            await update.message.reply_text(f"❌ Video vượt quá 50MB hoặc đường truyền Telegram CDN timeout.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+            except Exception as e:
+                logger.error(f"Lỗi reply_video: {e}")
+                await update.message.reply_text(f"❌ Gặp lỗi khi tải video lên Telegram: {e}\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text(f"❌ Video vượt quá 50MB hoặc bị TikTok giới hạn khu vực.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
 
 
 # ================= KHỞI CHẠY BOT =================
@@ -2091,7 +2119,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: Multi-Bypass TikWM + Cobalt + YT + FB      ║\n"
+        "║ Features: Auto Speed Tag + Donate + FB Real Follow   ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
