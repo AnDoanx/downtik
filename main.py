@@ -169,7 +169,7 @@ def clean_temp_storage_files():
     return deleted_count, freed_bytes
 
 
-# ================= HỖ TRỢ STREAM BUFFER (FIX CHẶN CDN) =================
+# ================= HỖ TRỢ STREAM BUFFER =================
 async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
     session = await get_http_session()
     stream_headers = {
@@ -356,7 +356,7 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
         ("TikWM / Multi-Bypass:", "ONLINE (HD 1080p)", (74, 222, 128)),
         ("YouTube Core:", "Android/TV Bypassed", (74, 222, 128)),
         ("Disk Trống:", f"{free_gb} GB Available", (74, 222, 128) if free_gb > 1.0 else (239, 68, 68)),
-        ("FB Follower Sync:", "Direct Meta Engine", (74, 222, 128)),
+        ("FB Deep OSINT:", "Multi-Engine Active", (74, 222, 128)),
         ("DRM Engine:", "Cipher Unpack Online", (74, 222, 128)),
         ("Auto Cleaner:", "Zero-Disk Waste Engine", (226, 232, 240)),
     ]
@@ -566,7 +566,7 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
     return None, {}
 
 
-# ================= LOGIC FACEBOOK & CHECK FOLLOWER (UPDATED) =================
+# ================= LOGIC FACEBOOK & CHECK FOLLOWER (FIX TRIỆT ĐỂ) =================
 def estimate_fb_creation_details(uid: str) -> str:
     if not uid.isdigit():
         return "Không công khai 🔒"
@@ -623,15 +623,15 @@ def estimate_fb_creation_details(uid: str) -> str:
 
 async def get_fb_id(input_str: str) -> str | None:
     clean = input_str.strip()
-    if clean.isdigit():
+    if clean.isdigit() and clean != "0":
         return clean
 
-    # 1. Trích xuất nếu URL đã chứa ID trực tiếp
-    match_id = re.search(r"[?&]id=(\d+)", clean)
+    # 1. Trích xuất nếu có id=... trong URL
+    match_id = re.search(r"[?&](?:id|profile_id)=([1-9]\d*)", clean)
     if match_id:
         return match_id.group(1)
 
-    url_match = re.search(r"facebook\.com/(?:people/[^/]+/)?(\d{8,})", clean)
+    url_match = re.search(r"facebook\.com/(?:people/[^/]+/)?([1-9]\d{4,})", clean)
     if url_match:
         return url_match.group(1)
 
@@ -645,81 +645,85 @@ async def get_fb_id(input_str: str) -> str | None:
 
     session = await get_http_session()
 
-    # 2. Cào trực tiếp thẻ meta deep-link và JSON payload trên Facebook web
-    target_url = f"https://www.facebook.com/{username}" if not username.startswith("http") else username
-    headers = {
-        **COMMON_HEADERS,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    }
-    if FB_COOKIE:
-        headers["Cookie"] = FB_COOKIE
-
-    try:
-        async with session.get(target_url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-            if resp.status == 200:
-                html_txt = await resp.text()
-
-                meta_id = re.search(r'content="fb://(?:profile|page)/(\d+)"', html_txt) or re.search(r'content="fb://(?:profile|page)\?id=(\d+)"', html_txt)
-                if meta_id:
-                    return meta_id.group(1)
-
-                json_id = re.search(r'"userID":"(\d+)"', html_txt) or re.search(r'"entity_id":"(\d+)"', html_txt) or re.search(r'"props":{"userID":"(\d+)"', html_txt)
-                if json_id:
-                    return json_id.group(1)
-    except Exception as e:
-        logger.warning(f"Lỗi cào direct UID: {e}")
-
-    # 3. Fallback TraoDoiSub API
+    # 2. Sử dụng TraoDoiSub API
+    target_link = clean if clean.startswith("http") else f"https://www.facebook.com/{username}"
     try:
         async with session.post(
             "https://id.traodoisub.com/api.php",
-            data={"link": clean if clean.startswith("http") else f"https://facebook.com/{clean}"},
+            data={"link": target_link},
             headers=COMMON_HEADERS,
             timeout=aiohttp.ClientTimeout(total=6),
         ) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
-                if j.get("id"):
+                if j and j.get("id") and str(j.get("id")) != "0":
                     return str(j["id"])
     except Exception:
         pass
 
-    # 4. Fallback FFB API
+    # 3. Sử dụng FFB API
     try:
         async with session.get(
-            f"https://ffb.vn/api/tool/get-id-fb?idfb={clean}",
+            f"https://ffb.vn/api/tool/get-id-fb?idfb={urllib.parse.quote(target_link)}",
             timeout=aiohttp.ClientTimeout(total=6),
         ) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
-                if j.get("id"):
+                if j and j.get("id") and str(j.get("id")) != "0":
                     return str(j["id"])
     except Exception:
         pass
 
-    return None
-
-
-async def scrape_fb_profile_meta(uid: str) -> dict:
-    """Bóc tách thông tin cá nhân qua OpenGraph & DOM hiện đại (Thay thế mbasic)."""
-    session = await get_http_session()
+    # 4. Sử dụng Crawler User-Agent để lấy meta deep-link từ web Facebook
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8",
     }
     if FB_COOKIE:
         headers["Cookie"] = FB_COOKIE
 
-    data = {
+    try:
+        async with session.get(f"https://www.facebook.com/{username}", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            if resp.status == 200:
+                html_txt = await resp.text()
+
+                m_id = (
+                    re.search(r'content="fb://(?:profile|page)/([1-9]\d*)"', html_txt) or
+                    re.search(r'content="fb://(?:profile|page)\?id=([1-9]\d*)"', html_txt) or
+                    re.search(r'property="al:(?:android|ios):url"\s+content="fb://(?:profile|page)/([1-9]\d*)"', html_txt) or
+                    re.search(r'"owning_profile_id":"([1-9]\d*)"', html_txt) or
+                    re.search(r'"entity_id":"([1-9]\d*)"', html_txt) or
+                    re.search(r'"identifier":"([1-9]\d*)"', html_txt)
+                )
+                if m_id:
+                    return m_id.group(1)
+    except Exception as e:
+        logger.warning(f"Lỗi direct UID crawl: {e}")
+
+    return None
+
+
+async def scrape_fb_deep_profile(uid: str) -> dict:
+    """Quét dữ liệu sâu (Họ tên, Nơi sống, Quê quán, Follower, Tích xanh) không cần token."""
+    session = await get_http_session()
+    result = {
         "name": None,
         "avatar": None,
         "bio": None,
         "followers": None,
+        "location": None,
+        "hometown": None,
         "verified": False,
     }
+
+    # Header Crawler để Facebook không redirect sang trang login
+    headers = {
+        "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    if FB_COOKIE:
+        headers["Cookie"] = FB_COOKIE
 
     url = f"https://www.facebook.com/{uid}"
     try:
@@ -727,40 +731,93 @@ async def scrape_fb_profile_meta(uid: str) -> dict:
             if r.status == 200:
                 txt = await r.text()
 
-                # Tên tài khoản từ og:title
+                # 1. Bóc tách Họ tên
                 m_title = re.search(r'<meta\s+(?:property|name)="og:title"\s+content="([^"]*)"', txt, re.IGNORECASE)
                 if m_title:
                     raw_title = html.unescape(m_title.group(1).strip())
-                    clean_name = re.sub(r"\s*\|\s*Facebook.*$", "", raw_title, flags=re.IGNORECASE)
-                    if clean_name and clean_name.lower() != "facebook":
-                        data["name"] = clean_name
+                    clean_name = re.sub(r"\s*\|\s*Facebook.*$", "", raw_title, flags=re.IGNORECASE).strip()
+                    if clean_name and clean_name.lower() not in ["facebook", "log in", "đăng nhập"]:
+                        result["name"] = clean_name
 
-                # Avatar trực tiếp từ og:image
+                if not result["name"]:
+                    tag_title = re.search(r'<title>([^<]+)</title>', txt, re.IGNORECASE)
+                    if tag_title:
+                        c_name = re.sub(r"\s*\|\s*Facebook.*$", "", html.unescape(tag_title.group(1))).strip()
+                        if c_name and c_name.lower() not in ["facebook", "log in", "đăng nhập"]:
+                            result["name"] = c_name
+
+                # 2. Avatar
                 m_img = re.search(r'<meta\s+(?:property|name)="og:image"\s+content="([^"]*)"', txt, re.IGNORECASE)
                 if m_img:
-                    data["avatar"] = html.unescape(m_img.group(1))
+                    result["avatar"] = html.unescape(m_img.group(1))
 
-                # Bio & Follower từ og:description
+                # 3. Follower & Bio từ og:description
                 m_desc = re.search(r'<meta\s+(?:property|name)="og:description"\s+content="([^"]*)"', txt, re.IGNORECASE)
                 if m_desc:
                     desc = html.unescape(m_desc.group(1).strip())
-                    fol_match = re.search(r'([0-9.,KMB]+)\s*(?:người theo dõi|Followers|người đang theo dõi)', desc, re.IGNORECASE)
-                    if fol_match:
-                        data["followers"] = fol_match.group(1).replace(".", "").replace(",", "").strip()
-                    if desc and not desc.lower().startswith("facebook"):
-                        data["bio"] = desc
+                    fol_m = re.search(r'([0-9.,]+[KMBkmb]?)\s*(?:người theo dõi|Followers|followers|người đang theo dõi)', desc, re.IGNORECASE)
+                    if fol_m:
+                        result["followers"] = fol_m.group(1).replace(".", "").replace(",", "").strip()
+                    if desc and not desc.lower().startswith("facebook") and "tham gia facebook" not in desc.lower():
+                        result["bio"] = desc
 
-                # Quét dấu tích xanh
-                if '"is_verified":true' in txt or 'verified badge' in txt.lower():
-                    data["verified"] = True
+                # Quét follower thêm trong JSON
+                if not result["followers"]:
+                    fol_json = (
+                        re.search(r'"subscriber_count":\s*(\d+)', txt) or
+                        re.search(r'"follower_count":\s*(\d+)', txt) or
+                        re.search(r'"followers":\s*\{\s*"count":\s*(\d+)', txt) or
+                        re.search(r'([0-9.,]+)\s*(?:người theo dõi|Followers)', txt)
+                    )
+                    if fol_json:
+                        result["followers"] = fol_json.group(1).replace(".", "").replace(",", "").strip()
+
+                # 4. Nơi sinh sống (Lives in / Sống tại)
+                m_loc = (
+                    re.search(r'"current_city":\s*\{[^}]*"name":\s*"([^"]+)"', txt) or
+                    re.search(r'"current_city":\s*\{[^}]*"text":\s*"([^"]+)"', txt) or
+                    re.search(r'Sống tại\s+<a[^>]*>([^<]+)</a>', txt, re.IGNORECASE) or
+                    re.search(r'Sống tại\s+([A-ZÀ-Ỹa-zà-ỹ0-9\s,.-]+?)(?:<|\n|"|•|Quê|Đến từ)', txt) or
+                    re.search(r'Lives in\s+<a[^>]*>([^<]+)</a>', txt, re.IGNORECASE) or
+                    re.search(r'Lives in\s+([A-Za-z0-9\s,.-]+?)(?:<|\n|"|•|From)', txt)
+                )
+                if m_loc:
+                    val = m_loc.group(1).strip()
+                    if len(val) < 60:
+                        result["location"] = val
+
+                # 5. Quê quán (Hometown / Đến từ)
+                m_home = (
+                    re.search(r'"hometown":\s*\{[^}]*"name":\s*"([^"]+)"', txt) or
+                    re.search(r'"hometown":\s*\{[^}]*"text":\s*"([^"]+)"', txt) or
+                    re.search(r'Đến từ\s+<a[^>]*>([^<]+)</a>', txt, re.IGNORECASE) or
+                    re.search(r'Đến từ\s+([A-ZÀ-Ỹa-zà-ỹ0-9\s,.-]+?)(?:<|\n|"|•|Sống tại)', txt) or
+                    re.search(r'From\s+<a[^>]*>([^<]+)</a>', txt, re.IGNORECASE) or
+                    re.search(r'From\s+([A-Za-z0-9\s,.-]+?)(?:<|\n|"|•|Lives in)', txt)
+                )
+                if m_home:
+                    val = m_home.group(1).strip()
+                    if len(val) < 60:
+                        result["hometown"] = val
+
+                # 6. Tích xanh
+                if (
+                    re.search(r'"(?:is_verified|is_blue_badge_verified)":\s*true', txt, re.IGNORECASE) or
+                    re.search(r'"verification_status":\s*"blue_verified"', txt, re.IGNORECASE) or
+                    'aria-label="Đã xác minh"' in txt or
+                    'aria-label="Verified"' in txt or
+                    'verified badge' in txt.lower()
+                ):
+                    result["verified"] = True
 
     except Exception as e:
-        logger.warning(f"Lỗi scrape facebook profile meta: {e}")
+        logger.warning(f"Lỗi deep crawl fb: {e}")
 
-    return data
+    return result
 
 
 async def fetch_fb_info(uid: str) -> dict | None:
+    session = await get_http_session()
     result = {
         "id": uid,
         "name": None,
@@ -778,44 +835,57 @@ async def fetch_fb_info(uid: str) -> dict | None:
         "avatar_url": None,
     }
 
-    # 1. Bóc tách trực tiếp bằng Meta OpenGraph
-    meta_info = await scrape_fb_profile_meta(uid)
-    if meta_info.get("name"):
-        result["name"] = meta_info["name"]
-    if meta_info.get("avatar"):
-        result["avatar_url"] = meta_info["avatar"]
-    if meta_info.get("bio"):
-        result["about"] = meta_info["bio"]
-    if meta_info.get("followers"):
-        result["followers"] = meta_info["followers"]
-    if meta_info.get("verified"):
+    # 1. Gọi trực tiếp API dịch vụ chuyên dụng
+    lookup_urls = [
+        f"https://subgiare.vn/api/service/facebook/get-uid-info?uid={uid}",
+        f"https://ffb.vn/api/tool/get-info-fb?uid={uid}",
+    ]
+    for target in lookup_urls:
+        try:
+            async with session.get(target, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    j = await resp.json(content_type=None)
+                    box = j.get("data") if isinstance(j.get("data"), dict) else j
+                    if box:
+                        if not result["name"] and box.get("name"):
+                            result["name"] = str(box["name"]).strip()
+                        if not result["followers"]:
+                            fol = box.get("followers") or box.get("sub")
+                            if fol:
+                                result["followers"] = re.sub(r"[^\d]", "", str(fol))
+                        if not result["location"] and (box.get("location") or box.get("city")):
+                            result["location"] = str(box.get("location") or box.get("city")).strip()
+                        if not result["hometown"] and box.get("hometown"):
+                            result["hometown"] = str(box["hometown"]).strip()
+                        if box.get("is_verified") or box.get("verified"):
+                            result["verified"] = True
+                        if box.get("gender"):
+                            result["gender"] = box.get("gender")
+        except Exception:
+            pass
+
+    # 2. Cào dữ liệu sâu bù đắp các trường còn thiếu
+    scraped = await scrape_fb_deep_profile(uid)
+    if not result["name"] and scraped.get("name"):
+        result["name"] = scraped["name"]
+    if not result["followers"] and scraped.get("followers"):
+        result["followers"] = scraped["followers"]
+    if not result["location"] and scraped.get("location"):
+        result["location"] = scraped["location"]
+    if not result["hometown"] and scraped.get("hometown"):
+        result["hometown"] = scraped["hometown"]
+    if scraped.get("verified"):
         result["verified"] = True
-
-    # 2. Quét dự phòng số Follower qua subgiare / ffb
-    if not result.get("followers"):
-        session = await get_http_session()
-        for api_target in [
-            f"https://subgiare.vn/api/service/facebook/get-uid-info?uid={uid}",
-            f"https://ffb.vn/api/tool/get-info-fb?uid={uid}",
-        ]:
-            try:
-                async with session.get(api_target, timeout=aiohttp.ClientTimeout(total=4)) as resp:
-                    if resp.status == 200:
-                        j = await resp.json(content_type=None)
-                        fol = j.get("followers") or j.get("sub") or j.get("data", {}).get("followers")
-                        if fol:
-                            clean_fol = re.sub(r"[^\d]", "", str(fol))
-                            if clean_fol:
-                                result["followers"] = clean_fol
-                                break
-            except Exception:
-                pass
-
-    if not result["name"] and result["id"]:
-        result["name"] = f"Người dùng Facebook ({uid})"
+    if scraped.get("bio"):
+        result["about"] = scraped["bio"]
+    if scraped.get("avatar"):
+        result["avatar_url"] = scraped["avatar"]
 
     if not result["avatar_url"]:
-        result["avatar_url"] = f"https://graph.facebook.com/{uid}/picture?type=large"
+        result["avatar_url"] = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
+
+    if not result["name"]:
+        result["name"] = f"Người dùng Facebook ({uid})"
 
     return result
 
@@ -830,14 +900,21 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
 
     raw_fol = data.get("followers")
     if raw_fol:
-        clean_fol = str(raw_fol).replace(",", "").replace(".", "").strip()
-        followers_str = f"<b>{int(clean_fol):,}</b> người theo dõi" if clean_fol.isdigit() else f"<b>{raw_fol}</b> người theo dõi"
+        clean_fol = re.sub(r"[^\d]", "", str(raw_fol))
+        if clean_fol.isdigit() and int(clean_fol) > 0:
+            followers_str = f"<b>{int(clean_fol):,}</b> người theo dõi"
+        else:
+            followers_str = f"<b>{raw_fol}</b> người theo dõi"
     else:
         followers_str = "<i>Không công khai hoặc đã ẩn follow</i>"
 
     created_str = estimate_fb_creation_details(uid)
-    badge = "💎 ĐÃ XÁC MINH (TÍCH XANH)" if data.get("verified") else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
+    badge = "💎 ĐÃ XÁC MINH (TÍCH XANH ✅)" if data.get("verified") else "⚪ CHƯA XÁC MINH (KHÔNG TÍCH ❌)"
     avatar_url = data.get("avatar_url") or f"https://graph.facebook.com/{uid}/picture?type=large"
+
+    location_str = html.escape(str(data.get("location") or "Không công khai 🔒"))
+    hometown_str = html.escape(str(data.get("hometown") or "Không công khai 🔒"))
+    bio_str = html.escape(str(data.get("about") or "Không có tiểu sử."))
 
     panel = (
         f"╭━━━〔 🔵 <b>FACEBOOK PRO OSINT</b> 〕━━━╮\n"
@@ -851,8 +928,11 @@ def format_fb_info_panel(data: dict) -> tuple[str, str]:
         f"┣ 👥 <b>Người theo dõi:</b> {followers_str}\n"
         f"┣ 🗓️ <b>Ước tính tạo nick:</b> <code>{created_str}</code>\n"
         f"┃\n"
+        f"┣ 📍 <b>Nơi sinh sống:</b> {location_str}\n"
+        f"┣ 🏡 <b>Quê quán:</b> {hometown_str}\n"
+        f"┃\n"
         f"┣ 📝 <b>Tiểu sử / Giới thiệu:</b>\n"
-        f"┃ <i>« {html.escape(str(data.get('about') or 'Không có tiểu sử.'))} »</i>\n"
+        f"┃ <i>« {bio_str} »</i>\n"
         f"┃\n"
         f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n"
         f"👉 <b>Profile:</b> <a href='https://facebook.com/{uid}'>fb.com/{uid}</a>"
@@ -1178,7 +1258,7 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
         f"👋 <i>Xin chào,</i> <b>{display_name}</b>!\n"
         f"Chào mừng bạn đến với hệ thống bot tiện ích tự động đa nền tảng.\n\n"
-        f"╭━━━〔 🛠️ <b>DANH SÁCH TÍNH NĂNG</b> 〕━━━╮\n"
+        f"╭━━━〔 🛠️️ <b>DANH SÁCH TÍNH NĂNG</b> 〕━━━╮\n"
         f"┣ 🎶 <b>Tải nhạc YouTube:</b> <code>/sing &lt;tên bài&gt;</code>\n"
         f"┣ 📥 <b>Tải TikTok HD:</b> Gửi link trực tiếp (No logo)\n"
         f"┣ 🎵 <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
@@ -1249,7 +1329,7 @@ async def run_system_cleanup(status_msg, start_req_time: float):
         result_text = (
             f"╭━━━〔 ✅ <b>GIẢI PHÓNG DUNG LƯỢNG</b> 〕━━━╮\n"
             f"┃\n"
-            f"┣ 🗑️️ <b>Số tệp tạm đã xóa:</b> <code>{del_count}</code> files\n"
+            f"┣ 🗑️ <b>Số tệp tạm đã xóa:</b> <code>{del_count}</code> files\n"
             f"┣ 📦 <b>Dung lượng dọn sạch:</b> <code>{freed_mb} MB</code>\n"
             f"┣ 💾 <b>Ổ đĩa trống còn lại:</b> <code>{free_gb} GB</code>\n"
             f"┣ ⚡ <b>Trạng thái:</b> Sẵn sàng nhận lệnh mới\n"
@@ -1658,7 +1738,7 @@ async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(f"❌ Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
-    await status_msg.edit_text(f"📡 <i>Đang quét dữ liệu OSINT & Follower cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
+    await status_msg.edit_text(f"📡 <i>Đang quét thông tin chuyên sâu cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
     data = await fetch_fb_info(uid)
 
     if not data:
@@ -1933,10 +2013,10 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await msg.edit_text(f"❌ Không trích xuất được link tải video.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
             return
 
-        # Tải file về buffer RAM để Telegram gửi đi (tránh bị Telegram chặn URL CDN)
+        # Tải file về buffer RAM để Telegram gửi đi
         stream_video = await download_file_stream(video_url, max_size_mb=48)
 
-        # Fallback khẩn cấp nếu API CDN bị chặn IP: Dùng yt-dlp tải thẳng file local
+        # Fallback bằng yt-dlp nếu CDN bị chặn
         if not stream_video:
             def _ytdlp_direct_dl(u):
                 tmp = tempfile.gettempdir()
