@@ -26,6 +26,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -53,7 +54,7 @@ E_ALERT   = '<tg-emoji emoji-id="6269253325477123346">⚠️</tg-emoji>'
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAE6zt_01TePivwodfw7dVmSWn0prRCvFw8").strip()
 ALLOWED_USERS = []
 
-# Tắt log in URL kèm token của httpx ra console
+# Tắt log token của httpx
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Cookies cấu hình cho yt-dlp
@@ -101,6 +102,38 @@ logging.basicConfig(
 logger = logging.getLogger("MultiToolBot")
 
 HTTP_SESSION: aiohttp.ClientSession | None = None
+
+
+# ================= CÁC HÀM XỬ LÝ AN TOÀN TRÁNH CRASH =================
+async def safe_delete(msg):
+    """Xóa tin nhắn an toàn, không ném ngoại lệ nếu tin nhắn không còn tồn tại."""
+    if not msg:
+        return
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+
+async def safe_edit_text(msg, text: str, **kwargs):
+    """Sửa tin nhắn an toàn, phòng ngừa lỗi 'Message to edit not found'."""
+    if not msg:
+        return None
+    try:
+        return await msg.edit_text(text, **kwargs)
+    except BadRequest as e:
+        err_str = str(e).lower()
+        if "message to edit not found" in err_str:
+            try:
+                return await msg.chat.send_message(text, **kwargs)
+            except Exception:
+                return None
+        if "message is not modified" in err_str:
+            return msg
+        logger.warning(f"Lỗi safe_edit_text: {e}")
+    except Exception as e:
+        logger.warning(f"Lỗi ngoại lệ safe_edit_text: {e}")
+    return None
 
 
 def is_authorized(user_id: int) -> bool:
@@ -894,7 +927,7 @@ async def fetch_tiktok_user_info(username: str) -> dict:
     session = await get_http_session()
     clean_user = username.strip().lstrip("@")
 
-    # Ưu tiên 1: TikWM User API
+    # Ưu tiên 1: TikWM User Info API (chuẩn và nhanh nhất)
     try:
         tikwm_url = f"https://www.tikwm.com/api/user/info?unique_id={clean_user}"
         async with session.get(tikwm_url, timeout=aiohttp.ClientTimeout(total=7)) as resp:
@@ -914,7 +947,7 @@ async def fetch_tiktok_user_info(username: str) -> dict:
                 try:
                     return json.loads(text_data)
                 except Exception:
-                    return {"error": "Máy chủ tra cứu trả về phản hồi không hợp lệ."}
+                    return {"error": "Phản hồi dữ liệu máy chủ không hợp lệ."}
             return {"error": f"HTTP Status {resp.status}"}
     except asyncio.TimeoutError:
         return {"error": "Hết thời gian chờ phản hồi từ máy chủ TikTok."}
@@ -1044,7 +1077,8 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
 # ================= TIẾN TRÌNH DỌN RÁC BỘ NHỚ =================
 async def run_system_cleanup(status_msg, start_req_time: float):
     try:
-        await status_msg.edit_text(
+        await safe_edit_text(
+            status_msg,
             f"🧹 <b>[Bước 1/3] Đang thu hồi bộ nhớ RAM và dọn Python GC...</b>\n"
             f"⏳ <i>Vui lòng đợi 2 giây...</i>",
             parse_mode=ParseMode.HTML,
@@ -1052,7 +1086,8 @@ async def run_system_cleanup(status_msg, start_req_time: float):
         gc.collect()
         await asyncio.sleep(2)
 
-        await status_msg.edit_text(
+        await safe_edit_text(
+            status_msg,
             f"🗄️ <b>[Bước 2/3] Đang quét và xóa toàn bộ file tạm media trên ổ đĩa...</b>\n"
             f"⏳ <i>Vui lòng đợi 2 giây...</i>",
             parse_mode=ParseMode.HTML,
@@ -1076,10 +1111,10 @@ async def run_system_cleanup(status_msg, start_req_time: float):
             f"┃{speed_line}\n"
             f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
         )
-        await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, result_text, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Lỗi khi dọn rác hệ thống: {e}")
-        await status_msg.edit_text(f"{E_ALERT} Quá trình dọn rác gặp sự cố: {e}", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, f"{E_ALERT} Quá trình dọn rác gặp sự cố: {e}", parse_mode=ParseMode.HTML)
 
 
 async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1129,12 +1164,15 @@ async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
         except Exception:
-            await update.callback_query.message.reply_photo(
-                photo=IMG_DONATE,
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
+            try:
+                await update.callback_query.message.reply_photo(
+                    photo=IMG_DONATE,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+            except Exception:
+                pass
 
 
 # ================= TELEGRAM HANDLERS =================
@@ -1158,11 +1196,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     elif update.callback_query:
-        await update.callback_query.message.edit_caption(
-            caption=text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup,
-        )
+        try:
+            await update.callback_query.message.edit_caption(
+                caption=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            pass
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1182,7 +1223,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{speed_line}"
     )
 
-    await status_msg.delete()
+    await safe_delete(status_msg)
     try:
         await update.message.reply_photo(
             photo=canvas_buffer,
@@ -1233,7 +1274,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
         except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+            await safe_edit_text(query.message, text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_guide_down":
         text = (
@@ -1248,7 +1289,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
         except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+            await safe_edit_text(query.message, text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_guide_music":
         text = (
@@ -1263,7 +1304,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
         except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+            await safe_edit_text(query.message, text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_guide_info":
         text = (
@@ -1278,7 +1319,7 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
         except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
+            await safe_edit_text(query.message, text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == "panel_cleanup":
         await query.answer("🧹 Đang thực hiện dọn dẹp hệ thống...", show_alert=False)
@@ -1339,7 +1380,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = await search_youtube_fast(keyword, 6)
 
     if not results:
-        await status_msg.edit_text(f"{E_ALERT} Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, f"{E_ALERT} Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     context.bot_data[f"kw_{update.effective_chat.id}"] = keyword
@@ -1366,7 +1407,7 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines.append(f"<code>────────────────────────────</code>\n👉 <i>Bấm số bài hát để tải âm thanh:</i>\n{get_speed_tag(t0)}")
     text_content = "\n".join(msg_lines)
 
-    await status_msg.delete()
+    await safe_delete(status_msg)
     try:
         await update.message.reply_photo(
             photo=IMG_SING,
@@ -1402,7 +1443,7 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
     loop = asyncio.get_running_loop()
     stream_file, details = await loop.run_in_executor(None, extract_youtube_audio_advanced, vid_id, saved_kw)
 
-    await loading_msg.delete()
+    await safe_delete(loading_msg)
 
     if not stream_file:
         await query.message.reply_text(f"{E_ALERT} Không thể tải được bài hát này hoặc vượt quá dung lượng. Hãy chọn bài khác!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
@@ -1527,7 +1568,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = await get_tiktok_universal_data(raw_url)
 
     if not data or not data.get("data"):
-        await msg.edit_text(f"{E_ALERT} <b>Không trích xuất được:</b> Video riêng tư, bị xoá hoặc link không hợp lệ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await safe_edit_text(msg, f"{E_ALERT} <b>Không trích xuất được:</b> Video riêng tư, bị xoá hoặc link không hợp lệ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     res = data["data"]
@@ -1535,7 +1576,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     music_url = ensure_full_url(raw_music)
 
     if not music_url:
-        await msg.edit_text(f"{E_ALERT} Video này không có âm thanh hoặc bị tắt tiếng do bản quyền.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await safe_edit_text(msg, f"{E_ALERT} Video này không có âm thanh hoặc bị tắt tiếng do bản quyền.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     music_title = html.escape(res.get("music_info", {}).get("title") or "TikTok Audio")
@@ -1553,7 +1594,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     file_id = res.get('id', 'audio')
     stream_file = await download_file_stream(music_url, max_size_mb=30, filename=f"{file_id}.mp3")
-    await msg.delete()
+    await safe_delete(msg)
     caption_clean = truncate_text(audio_panel, 1020)
 
     try:
@@ -1609,7 +1650,8 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report, avatar = format_user_info_panel(info_data, username)
         report += f"\n{get_speed_tag(t0)}"
 
-        await status_msg.delete()
+        await safe_delete(status_msg)
+
         photo_to_send = avatar or IMG_GETINFO
         try:
             await update.message.reply_photo(photo=photo_to_send, caption=report, parse_mode=ParseMode.HTML)
@@ -1617,7 +1659,8 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(report, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Lỗi getinfo: {e}")
-        await status_msg.edit_text(f"{E_ALERT} Không thể hoàn tất tra cứu: {e}", parse_mode=ParseMode.HTML)
+        await safe_delete(status_msg)
+        await update.message.reply_text(f"{E_ALERT} Không thể hoàn tất tra cứu: {e}", parse_mode=ParseMode.HTML)
 
 
 # ================= TỰ ĐỘNG BẮT LINK TIKTOK & INSTAGRAM =================
@@ -1642,7 +1685,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         data = await get_instagram_media_data(raw_url)
 
         if not data:
-            await msg.edit_text(
+            await safe_edit_text(
+                msg,
                 f"{E_ALERT} <b>Tải thất bại:</b> Video/Reel riêng tư, link hết hạn hoặc Instagram chặn truy cập.\n{get_speed_tag(t0)}",
                 parse_mode=ParseMode.HTML,
             )
@@ -1666,7 +1710,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Xử lý Album ảnh Instagram
         if data.get("type") == "album" and data.get("images"):
-            await msg.delete()
+            await safe_delete(msg)
             all_images = data["images"]
             for i in range(0, len(all_images), 10):
                 batch = all_images[i : i + 10]
@@ -1679,7 +1723,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         media_url = ensure_full_url(data.get("url"))
         stream_video = await download_file_stream(media_url, max_size_mb=48, filename="instagram.mp4")
 
-        # Fallback bằng yt-dlp ép định dạng AVC1/MP4 tương thích hoàn toàn Telegram
+        # Fallback bằng yt-dlp ép định dạng AVC1/MP4 tương thích Telegram
         if not stream_video:
             def _ytdlp_ig_dl(u):
                 tmp = tempfile.gettempdir()
@@ -1708,7 +1752,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             loop = asyncio.get_running_loop()
             stream_video = await loop.run_in_executor(None, _ytdlp_ig_dl, raw_url)
 
-        await msg.delete()
+        await safe_delete(msg)
 
         if stream_video:
             try:
@@ -1741,7 +1785,8 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         data = await get_tiktok_universal_data(raw_url)
 
         if not data or not data.get("data"):
-            await msg.edit_text(
+            await safe_edit_text(
+                msg,
                 f"{E_ALERT} <b>Tải thất bại:</b> Video riêng tư, bị xoá hoặc link không hỗ trợ.\n{get_speed_tag(t0)}",
                 parse_mode=ParseMode.HTML,
             )
@@ -1775,7 +1820,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Bài đăng Album Slide
         if res.get("images"):
-            await msg.delete()
+            await safe_delete(msg)
             all_images = res["images"]
             for i in range(0, len(all_images), 10):
                 batch = all_images[i : i + 10]
@@ -1794,12 +1839,12 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         video_url = ensure_full_url(raw_video_url)
 
         if not video_url:
-            await msg.edit_text(f"{E_ALERT} Không trích xuất được link tải video.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+            await safe_edit_text(msg, f"{E_ALERT} Không trích xuất được link tải video.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
             return
 
         stream_video = await download_file_stream(video_url, max_size_mb=48, filename="tiktok.mp4")
 
-        # Fallback bằng yt-dlp nếu tải stream trực tiếp bị chặn
+        # Fallback bằng yt-dlp nếu CDN bị chặn
         if not stream_video:
             def _ytdlp_direct_dl(u):
                 tmp = tempfile.gettempdir()
@@ -1827,7 +1872,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             loop = asyncio.get_running_loop()
             stream_video = await loop.run_in_executor(None, _ytdlp_direct_dl, raw_url)
 
-        await msg.delete()
+        await safe_delete(msg)
 
         if stream_video:
             try:
