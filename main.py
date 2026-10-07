@@ -38,7 +38,7 @@ import yt_dlp
 
 BOT_START_TIME = time.time()
 
-# ================= CẤU HÌNH EMOJI ĐỘNG (CUSTOM TELEGRAM EMOJIS) =================
+# ================= CẤU HÌNH EMOJI ĐỘNG =================
 E_SPARKLE = '<tg-emoji emoji-id="5471907739489826360">✨</tg-emoji>'
 E_FIRE    = '<tg-emoji emoji-id="5474195655683505314">🔥</tg-emoji>'
 E_MUSIC   = '<tg-emoji emoji-id="5471930872183683627">🎵</tg-emoji>'
@@ -50,10 +50,13 @@ E_SEARCH  = '<tg-emoji emoji-id="6260215820933144560">🔍</tg-emoji>'
 E_ALERT   = '<tg-emoji emoji-id="6269253325477123346">⚠️</tg-emoji>'
 
 # ================= CẤU HÌNH TOKEN & API =================
-BOT_TOKEN = os.getenv("8949220582:AAE6zt_01TePivwodfw7dVmSWn0prRCvFw8", "8949220582:AAE6zt_01TePivwodfw7dVmSWn0prRCvFw8").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAE6zt_01TePivwodfw7dVmSWn0prRCvFw8").strip()
 ALLOWED_USERS = []
 
-# Hỗ trợ truyền cookies.txt qua biến môi trường để tải YouTube/TikTok/Instagram
+# Tắt log in URL kèm token của httpx ra console
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Cookies cấu hình cho yt-dlp
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
 COOKIE_FILE_PATH = None
 
@@ -109,7 +112,13 @@ def is_authorized(user_id: int) -> bool:
 async def get_http_session() -> aiohttp.ClientSession:
     global HTTP_SESSION
     if HTTP_SESSION is None or HTTP_SESSION.closed:
-        HTTP_SESSION = aiohttp.ClientSession(headers=COMMON_HEADERS)
+        connector = aiohttp.TCPConnector(limit=50, keepalive_timeout=30)
+        timeout = aiohttp.ClientTimeout(total=25, connect=6)
+        HTTP_SESSION = aiohttp.ClientSession(
+            connector=connector,
+            headers=COMMON_HEADERS,
+            timeout=timeout,
+        )
     return HTTP_SESSION
 
 
@@ -121,7 +130,6 @@ async def close_http_session(application: Application = None):
 
 
 def get_speed_tag(start_time: float) -> str:
-    """Tạo tag thời gian phản hồi kèm biểu tượng tốc độ telegram style."""
     duration = time.perf_counter() - start_time
     if duration < 1.0:
         badge = f"{E_BOLT} Siêu tốc ({duration:.2f}s)"
@@ -173,7 +181,7 @@ def clean_temp_storage_files():
 
 
 # ================= HỖ TRỢ STREAM BUFFER =================
-async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
+async def download_file_stream(url: str, max_size_mb: int = 50, filename: str = "media.mp4") -> io.BytesIO | None:
     session = await get_http_session()
     stream_headers = {
         "User-Agent": COMMON_HEADERS["User-Agent"],
@@ -185,21 +193,21 @@ async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | 
             url,
             headers=stream_headers,
             allow_redirects=True,
-            timeout=aiohttp.ClientTimeout(total=60),
+            timeout=aiohttp.ClientTimeout(total=45),
         ) as resp:
             if resp.status in (200, 206):
                 buf = io.BytesIO()
                 total_downloaded = 0
                 max_bytes = max_size_mb * 1024 * 1024
 
-                async for chunk in resp.content.iter_chunked(128 * 1024):
+                async for chunk in resp.content.iter_chunked(256 * 1024):
                     total_downloaded += len(chunk)
                     if total_downloaded > max_bytes:
                         return None
                     buf.write(chunk)
 
                 buf.seek(0)
-                buf.name = "media.mp4"
+                buf.name = filename
                 return buf
             else:
                 logger.warning(f"CDN từ chối kết nối (HTTP {resp.status}): {url}")
@@ -407,7 +415,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
     }
 
     try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 html_data = await resp.text()
                 match = re.search(r"var ytInitialData\s*=\s*({.+?});</script>", html_data)
@@ -568,7 +576,6 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
 
 # ================= LOGIC INSTAGRAM REELS/POSTS ĐA TẦNG =================
 async def cobalt_insta_download(ig_url: str):
-    """API 1: Cobalt Core Engine cho Instagram."""
     session = await get_http_session()
     cobalt_instances = [
         "https://api.cobalt.tools/api/json",
@@ -588,7 +595,7 @@ async def cobalt_insta_download(ig_url: str):
     for endpoint in cobalt_instances:
         try:
             async with session.post(
-                endpoint, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=12)
+                endpoint, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=8)
             ) as resp:
                 if resp.status == 200:
                     j = await resp.json(content_type=None)
@@ -614,7 +621,6 @@ async def cobalt_insta_download(ig_url: str):
 
 
 def ytdlp_insta_extract(ig_url: str):
-    """API 2: yt-dlp native trích xuất stream trực tiếp."""
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -655,7 +661,6 @@ def ytdlp_insta_extract(ig_url: str):
 
 
 async def get_instagram_media_data(raw_url: str):
-    """Điều phối trích xuất Instagram Reels/Posts/Stories."""
     clean_url = raw_url.strip()
 
     # 1. Cobalt Core Engine
@@ -677,7 +682,7 @@ async def resolve_tiktok_url(url: str) -> str:
     session = await get_http_session()
     clean = url.strip()
     try:
-        async with session.get(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        async with session.get(clean, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             return str(resp.url)
     except Exception as e:
         logger.warning(f"Lỗi resolve url {clean}: {e}")
@@ -694,7 +699,7 @@ async def tikwm_req(params: dict):
         "Referer": "https://www.tikwm.com/",
     }
     try:
-        async with session.post(url, data=params, headers=post_headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+        async with session.post(url, data=params, headers=post_headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 200:
                 data = await resp.json(content_type=None)
                 if data and data.get("code") == 0 and data.get("data"):
@@ -703,7 +708,7 @@ async def tikwm_req(params: dict):
         logger.warning(f"TikWM POST fail: {e}")
 
     try:
-        async with session.get(url, params=params, headers=COMMON_HEADERS, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+        async with session.get(url, params=params, headers=COMMON_HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 200:
                 data = await resp.json(content_type=None)
                 if data and data.get("code") == 0 and data.get("data"):
@@ -732,7 +737,7 @@ async def cobalt_tik_download(tiktok_url: str):
     }
     for endpoint in cobalt_instances:
         try:
-            async with session.post(endpoint, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+            async with session.post(endpoint, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
                 if resp.status == 200:
                     j = await resp.json(content_type=None)
                     stream_url = j.get("url")
@@ -768,7 +773,7 @@ async def lovetik_fallback_download(tiktok_url: str):
         "Referer": "https://lovetik.com/",
     }
     try:
-        async with session.post(api_url, data=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+        async with session.post(api_url, data=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
             if resp.status == 200:
                 j = await resp.json(content_type=None)
                 if j.get("status") == "ok":
@@ -888,12 +893,31 @@ async def get_tiktok_universal_data(raw_url: str):
 async def fetch_tiktok_user_info(username: str) -> dict:
     session = await get_http_session()
     clean_user = username.strip().lstrip("@")
+
+    # Ưu tiên 1: TikWM User API
+    try:
+        tikwm_url = f"https://www.tikwm.com/api/user/info?unique_id={clean_user}"
+        async with session.get(tikwm_url, timeout=aiohttp.ClientTimeout(total=7)) as resp:
+            if resp.status == 200:
+                res = await resp.json(content_type=None)
+                if res and res.get("code") == 0 and res.get("data"):
+                    return res
+    except Exception as e:
+        logger.warning(f"TikWM user fetch fail: {e}")
+
+    # Ưu tiên 2: API phụ
     url = f"{TIK_INFO_API}{clean_user}"
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=7)) as resp:
             if resp.status == 200:
-                return await resp.json(content_type=None)
+                text_data = await resp.text()
+                try:
+                    return json.loads(text_data)
+                except Exception:
+                    return {"error": "Máy chủ tra cứu trả về phản hồi không hợp lệ."}
             return {"error": f"HTTP Status {resp.status}"}
+    except asyncio.TimeoutError:
+        return {"error": "Hết thời gian chờ phản hồi từ máy chủ TikTok."}
     except Exception as e:
         logger.error(f"Lỗi lấy thông tin TikTok: {e}")
         return {"error": str(e)}
@@ -1022,29 +1046,20 @@ async def run_system_cleanup(status_msg, start_req_time: float):
     try:
         await status_msg.edit_text(
             f"🧹 <b>[Bước 1/3] Đang thu hồi bộ nhớ RAM và dọn Python GC...</b>\n"
-            f"⏳ <i>Vui lòng đợi 3 giây...</i>",
+            f"⏳ <i>Vui lòng đợi 2 giây...</i>",
             parse_mode=ParseMode.HTML,
         )
-        collected = gc.collect()
-        logger.info(f"Đã giải phóng GC: {collected} objects.")
-        await asyncio.sleep(3)
+        gc.collect()
+        await asyncio.sleep(2)
 
         await status_msg.edit_text(
             f"🗄️ <b>[Bước 2/3] Đang quét và xóa toàn bộ file tạm media trên ổ đĩa...</b>\n"
-            f"⏳ <i>Vui lòng đợi 3 giây...</i>",
+            f"⏳ <i>Vui lòng đợi 2 giây...</i>",
             parse_mode=ParseMode.HTML,
         )
         loop = asyncio.get_running_loop()
         del_count, freed_bytes = await loop.run_in_executor(None, clean_temp_storage_files)
         freed_mb = round(freed_bytes / (1024 * 1024), 2)
-        logger.info(f"Dọn dẹp hoàn tất: Xóa {del_count} file, giải phóng {freed_mb} MB.")
-        await asyncio.sleep(3)
-
-        await status_msg.edit_text(
-            f"📊 <b>[Bước 3/3] Đang cập nhật dung lượng hệ thống...</b>\n"
-            f"⏳ <i>Vui lòng đợi 2 giây...</i>",
-            parse_mode=ParseMode.HTML,
-        )
         await asyncio.sleep(2)
 
         total, used, free = shutil.disk_usage("/")
@@ -1457,12 +1472,11 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
         f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
     )
 
-    stream_file = await download_file_stream(music_url, max_size_mb=30)
+    stream_file = await download_file_stream(music_url, max_size_mb=30, filename=f"{video_id}.mp3")
     caption_clean = truncate_text(audio_panel, 1020)
 
     try:
         if stream_file:
-            stream_file.name = f"{video_id}.mp3"
             await query.message.reply_audio(
                 audio=stream_file,
                 title=music_title,
@@ -1537,13 +1551,13 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
     )
 
-    stream_file = await download_file_stream(music_url, max_size_mb=30)
+    file_id = res.get('id', 'audio')
+    stream_file = await download_file_stream(music_url, max_size_mb=30, filename=f"{file_id}.mp3")
     await msg.delete()
     caption_clean = truncate_text(audio_panel, 1020)
 
     try:
         if stream_file:
-            stream_file.name = f"{res.get('id', 'audio')}.mp3"
             await update.message.reply_audio(
                 audio=stream_file,
                 title=music_title,
@@ -1590,16 +1604,20 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
     )
 
-    info_data = await fetch_tiktok_user_info(username)
-    report, avatar = format_user_info_panel(info_data, username)
-    report += f"\n{get_speed_tag(t0)}"
-
-    await status_msg.delete()
-    photo_to_send = avatar or IMG_GETINFO
     try:
-        await update.message.reply_photo(photo=photo_to_send, caption=report, parse_mode=ParseMode.HTML)
-    except Exception:
-        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+        info_data = await fetch_tiktok_user_info(username)
+        report, avatar = format_user_info_panel(info_data, username)
+        report += f"\n{get_speed_tag(t0)}"
+
+        await status_msg.delete()
+        photo_to_send = avatar or IMG_GETINFO
+        try:
+            await update.message.reply_photo(photo=photo_to_send, caption=report, parse_mode=ParseMode.HTML)
+        except Exception:
+            await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Lỗi getinfo: {e}")
+        await status_msg.edit_text(f"{E_ALERT} Không thể hoàn tất tra cứu: {e}", parse_mode=ParseMode.HTML)
 
 
 # ================= TỰ ĐỘNG BẮT LINK TIKTOK & INSTAGRAM =================
@@ -1657,30 +1675,34 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(caption_clean, parse_mode=ParseMode.HTML)
             return
 
-        # Xử lý Video Reels
+        # Xử lý Video Reels: Ép tên file .mp4
         media_url = ensure_full_url(data.get("url"))
-        stream_video = await download_file_stream(media_url, max_size_mb=48)
+        stream_video = await download_file_stream(media_url, max_size_mb=48, filename="instagram.mp4")
 
-        # Fallback lưu tạm nếu tải stream bộ nhớ thất bại
+        # Fallback bằng yt-dlp ép định dạng AVC1/MP4 tương thích hoàn toàn Telegram
         if not stream_video:
             def _ytdlp_ig_dl(u):
                 tmp = tempfile.gettempdir()
                 out_path = os.path.join(tmp, f"ig_{int(time.time())}.mp4")
                 opts = {
-                    "format": "best",
+                    "format": "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4]/best",
                     "outtmpl": out_path,
                     "quiet": True,
                     "no_warnings": True,
+                    "merge_output_format": "mp4",
                 }
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    ydl.download([u])
-                if os.path.exists(out_path):
-                    with open(out_path, "rb") as f:
-                        b = io.BytesIO(f.read())
-                    b.seek(0)
-                    b.name = "instagram.mp4"
-                    os.remove(out_path)
-                    return b
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        ydl.download([u])
+                    if os.path.exists(out_path):
+                        with open(out_path, "rb") as f:
+                            b = io.BytesIO(f.read())
+                        b.seek(0)
+                        b.name = "instagram.mp4"
+                        os.remove(out_path)
+                        return b
+                except Exception as ex:
+                    logger.warning(f"yt-dlp fallback IG fail: {ex}")
                 return None
 
             loop = asyncio.get_running_loop()
@@ -1768,7 +1790,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        # Lấy URL video: Ưu tiên link play không watermark
         raw_video_url = res.get("play") or res.get("hdplay")
         video_url = ensure_full_url(raw_video_url)
 
@@ -1776,29 +1797,31 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await msg.edit_text(f"{E_ALERT} Không trích xuất được link tải video.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
             return
 
-        # Tải file về buffer RAM để Telegram gửi đi
-        stream_video = await download_file_stream(video_url, max_size_mb=48)
+        stream_video = await download_file_stream(video_url, max_size_mb=48, filename="tiktok.mp4")
 
-        # Fallback bằng yt-dlp nếu CDN bị chặn
+        # Fallback bằng yt-dlp nếu tải stream trực tiếp bị chặn
         if not stream_video:
             def _ytdlp_direct_dl(u):
                 tmp = tempfile.gettempdir()
                 out_path = os.path.join(tmp, f"tik_{int(time.time())}.mp4")
                 opts = {
-                    "format": "best",
+                    "format": "best[ext=mp4]/best",
                     "outtmpl": out_path,
                     "quiet": True,
                     "no_warnings": True,
                 }
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    ydl.download([u])
-                if os.path.exists(out_path):
-                    with open(out_path, "rb") as f:
-                        b = io.BytesIO(f.read())
-                    b.seek(0)
-                    b.name = "tiktok.mp4"
-                    os.remove(out_path)
-                    return b
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        ydl.download([u])
+                    if os.path.exists(out_path):
+                        with open(out_path, "rb") as f:
+                            b = io.BytesIO(f.read())
+                        b.seek(0)
+                        b.name = "tiktok.mp4"
+                        os.remove(out_path)
+                        return b
+                except Exception as ex:
+                    logger.warning(f"yt-dlp tiktok fallback fail: {ex}")
                 return None
 
             loop = asyncio.get_running_loop()
