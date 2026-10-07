@@ -50,7 +50,7 @@ E_SEARCH  = '<tg-emoji emoji-id="6260215820933144560">🔍</tg-emoji>'
 E_ALERT   = '<tg-emoji emoji-id="6269253325477123346">⚠️</tg-emoji>'
 
 # ================= CẤU HÌNH TOKEN & API =================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98").strip()
 ALLOWED_USERS = []
 
 # Hỗ trợ truyền cookies.txt qua biến môi trường để tải YouTube/TikTok
