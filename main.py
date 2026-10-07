@@ -38,11 +38,20 @@ import yt_dlp
 
 BOT_START_TIME = time.time()
 
-# ================= CẤU HÌNH TOKEN & API =================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98").strip()
-ALLOWED_USERS = []
+# ================= CẤU HÌNH EMOJI ĐỘNG (CUSTOM TELEGRAM EMOJIS) =================
+E_SPARKLE = '<tg-emoji emoji-id="5471907739489826360">✨</tg-emoji>'
+E_FIRE    = '<tg-emoji emoji-id="5474195655683505314">🔥</tg-emoji>'
+E_MUSIC   = '<tg-emoji emoji-id="5471930872183683627">🎵</tg-emoji>'
+E_BOLT    = '<tg-emoji emoji-id="5339386257283764734">⚡</tg-emoji>'
+E_HEART   = '<tg-emoji emoji-id="6269163801178804220">💖</tg-emoji>'
+E_VERIFIED= '<tg-emoji emoji-id="6271786398404055377">✅</tg-emoji>'
+E_PIN     = '<tg-emoji emoji-id="6271271702408204490">📌</tg-emoji>'
+E_SEARCH  = '<tg-emoji emoji-id="6260215820933144560">🔍</tg-emoji>'
+E_ALERT   = '<tg-emoji emoji-id="6269253325477123346">⚠️</tg-emoji>'
 
-FB_COOKIE = os.getenv("FB_COOKIE", "").strip()
+# ================= CẤU HÌNH TOKEN & API =================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+ALLOWED_USERS = []
 
 # Hỗ trợ truyền cookies.txt qua biến môi trường để tải YouTube/TikTok
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
@@ -66,17 +75,11 @@ if YT_COOKIES_ENV:
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
-raw_fb_token = os.getenv("FB_TOKEN", "").strip()
-FB_TOKENS = [raw_fb_token] if raw_fb_token else [
-    "EAAAAUaZA8jlABSv6yeD3uBWPS8HcBca2YO6LIUlPo3pIGqLJ5dy5VAurXzOqYIdbWOMv4bDVbvqmFZAWhbhERAvRPusDXFNw4Y1pYN1jVcDCYFSr52BZBrCTNLWLt1ELZChCghXrYcpGvx4EeMMZBGdSpEa4unkYiyyoDgBpI0bMgQQS8MOCYYTHVe2G4KTmpHLtZAItDCcdVRPZCZA8nKFvogZDZD"
-]
-
 # Banner Images
 IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
 IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
 IMG_DOWN = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png"
-IMG_FB = "https://cdn.phototourl.com/member/2026-09-20-9afea8db-8a1c-4ffb-9f41-68c26a82f2f5.jpg"
 IMG_SING = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 IMG_DONATE = "https://cdn.upanhlaylink.com/i/bhMtLMHZ.jpeg"
 
@@ -121,12 +124,12 @@ def get_speed_tag(start_time: float) -> str:
     """Tạo tag thời gian phản hồi kèm biểu tượng tốc độ telegram style."""
     duration = time.perf_counter() - start_time
     if duration < 1.0:
-        badge = f"⚡ Siêu tốc ({duration:.2f}s)"
+        badge = f"{E_BOLT} Siêu tốc ({duration:.2f}s)"
     elif duration <= 2.8:
-        badge = f"🚀 Nhanh ({duration:.2f}s)"
+        badge = f"{E_FIRE} Nhanh ({duration:.2f}s)"
     else:
         badge = f"⏳ Ổn định ({duration:.2f}s)"
-    return f"\n⏱️ <b>Độ trễ phản hồi:</b> <code>{badge}</code>"
+    return f"\n{E_BOLT} <b>Độ trễ phản hồi:</b> <code>{badge}</code>"
 
 
 def truncate_text(text: str, max_len: int = 1000) -> str:
@@ -353,10 +356,10 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
     ]
 
     c2_data = [
-        ("TikWM / Multi-Bypass:", "ONLINE (HD 1080p)", (74, 222, 128)),
+        ("TikWM / Bypass:", "ONLINE (HD 1080p)", (74, 222, 128)),
         ("YouTube Core:", "Android/TV Bypassed", (74, 222, 128)),
         ("Disk Trống:", f"{free_gb} GB Available", (74, 222, 128) if free_gb > 1.0 else (239, 68, 68)),
-        ("FB Deep OSINT:", "Multi-Engine Active", (74, 222, 128)),
+        ("Stream Pipeline:", "Direct Ram Buffer", (74, 222, 128)),
         ("DRM Engine:", "Cipher Unpack Online", (74, 222, 128)),
         ("Auto Cleaner:", "Zero-Disk Waste Engine", (226, 232, 240)),
     ]
@@ -566,383 +569,8 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
     return None, {}
 
 
-# ================= LOGIC FACEBOOK & CHECK FOLLOWER (FIX TRIỆT ĐỂ) =================
-def estimate_fb_creation_details(uid: str) -> str:
-    if not uid.isdigit():
-        return "Không công khai 🔒"
-    val = int(uid)
-    if val < 10000000:
-        return "Năm 2004 - 2006 (Giai đoạn đầu)"
-    elif val < 100000000:
-        return "Năm 2006 - 2008"
-    elif val < 1000000000:
-        return "Năm 2008 - 2009"
-
-    if str(val).startswith("10000"):
-        part = int(str(val)[5:8])
-        if part < 15:
-            return "Năm 2009"
-        elif part < 35:
-            return "Năm 2010"
-        elif part < 65:
-            return "Năm 2011"
-        elif part < 110:
-            return "Năm 2012"
-        elif part < 180:
-            return "Năm 2013"
-        elif part < 260:
-            return "Năm 2014"
-        elif part < 360:
-            return "Năm 2015"
-        else:
-            return "Năm 2016"
-
-    if str(val).startswith("10001"):
-        return "Năm 2016 - 2017"
-    elif str(val).startswith("10002"):
-        return "Năm 2017 - 2018"
-    elif str(val).startswith("10003"):
-        return "Năm 2018 - 2019"
-    elif str(val).startswith("10004"):
-        return "Năm 2019 - 2020"
-    elif str(val).startswith("10005"):
-        return "Năm 2020 - 2021"
-    elif str(val).startswith("10006"):
-        return "Năm 2021 - 2022"
-    elif str(val).startswith("10007") or str(val).startswith("10008"):
-        return "Năm 2022 - 2023"
-    elif str(val).startswith("10009"):
-        return "Năm 2023 - 2024"
-    elif str(val).startswith("6155") or str(val).startswith("6156"):
-        return "Năm 2024 - 2025"
-    elif str(val).startswith("6157"):
-        return "Năm 2025 - 2026"
-
-    return "Tài khoản bảo mật cao 🛡️"
-
-
-async def get_fb_id(input_str: str) -> str | None:
-    clean = input_str.strip()
-    if clean.isdigit() and clean != "0":
-        return clean
-
-    # 1. Trích xuất nếu có id=... trong URL
-    match_id = re.search(r"[?&](?:id|profile_id)=([1-9]\d*)", clean)
-    if match_id:
-        return match_id.group(1)
-
-    url_match = re.search(r"facebook\.com/(?:people/[^/]+/)?([1-9]\d{4,})", clean)
-    if url_match:
-        return url_match.group(1)
-
-    username = clean
-    clean_url = clean.split("?")[0].rstrip("/")
-    path_match = re.search(r"(?:facebook\.com|fb\.me|fb\.com)/([a-zA-Z0-9.]+)", clean_url)
-    if path_match:
-        extracted = path_match.group(1)
-        if extracted not in ["profile.php", "groups", "pages", "watch", "stories", "share"]:
-            username = extracted
-
-    session = await get_http_session()
-
-    # 2. Sử dụng TraoDoiSub API
-    target_link = clean if clean.startswith("http") else f"https://www.facebook.com/{username}"
-    try:
-        async with session.post(
-            "https://id.traodoisub.com/api.php",
-            data={"link": target_link},
-            headers=COMMON_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=6),
-        ) as resp:
-            if resp.status == 200:
-                j = await resp.json(content_type=None)
-                if j and j.get("id") and str(j.get("id")) != "0":
-                    return str(j["id"])
-    except Exception:
-        pass
-
-    # 3. Sử dụng FFB API
-    try:
-        async with session.get(
-            f"https://ffb.vn/api/tool/get-id-fb?idfb={urllib.parse.quote(target_link)}",
-            timeout=aiohttp.ClientTimeout(total=6),
-        ) as resp:
-            if resp.status == 200:
-                j = await resp.json(content_type=None)
-                if j and j.get("id") and str(j.get("id")) != "0":
-                    return str(j["id"])
-    except Exception:
-        pass
-
-    # 4. Sử dụng Crawler User-Agent để lấy meta deep-link từ web Facebook
-    headers = {
-        "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8",
-    }
-    if FB_COOKIE:
-        headers["Cookie"] = FB_COOKIE
-
-    try:
-        async with session.get(f"https://www.facebook.com/{username}", headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-            if resp.status == 200:
-                html_txt = await resp.text()
-
-                m_id = (
-                    re.search(r'content="fb://(?:profile|page)/([1-9]\d*)"', html_txt) or
-                    re.search(r'content="fb://(?:profile|page)\?id=([1-9]\d*)"', html_txt) or
-                    re.search(r'property="al:(?:android|ios):url"\s+content="fb://(?:profile|page)/([1-9]\d*)"', html_txt) or
-                    re.search(r'"owning_profile_id":"([1-9]\d*)"', html_txt) or
-                    re.search(r'"entity_id":"([1-9]\d*)"', html_txt) or
-                    re.search(r'"identifier":"([1-9]\d*)"', html_txt)
-                )
-                if m_id:
-                    return m_id.group(1)
-    except Exception as e:
-        logger.warning(f"Lỗi direct UID crawl: {e}")
-
-    return None
-
-
-async def scrape_fb_deep_profile(uid: str) -> dict:
-    """Quét dữ liệu sâu (Họ tên, Nơi sống, Quê quán, Follower, Tích xanh) không cần token."""
-    session = await get_http_session()
-    result = {
-        "name": None,
-        "avatar": None,
-        "bio": None,
-        "followers": None,
-        "location": None,
-        "hometown": None,
-        "verified": False,
-    }
-
-    # Header Crawler để Facebook không redirect sang trang login
-    headers = {
-        "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-    if FB_COOKIE:
-        headers["Cookie"] = FB_COOKIE
-
-    url = f"https://www.facebook.com/{uid}"
-    try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
-            if r.status == 200:
-                txt = await r.text()
-
-                # 1. Bóc tách Họ tên
-                m_title = re.search(r'<meta\s+(?:property|name)="og:title"\s+content="([^"]*)"', txt, re.IGNORECASE)
-                if m_title:
-                    raw_title = html.unescape(m_title.group(1).strip())
-                    clean_name = re.sub(r"\s*\|\s*Facebook.*$", "", raw_title, flags=re.IGNORECASE).strip()
-                    if clean_name and clean_name.lower() not in ["facebook", "log in", "đăng nhập"]:
-                        result["name"] = clean_name
-
-                if not result["name"]:
-                    tag_title = re.search(r'<title>([^<]+)</title>', txt, re.IGNORECASE)
-                    if tag_title:
-                        c_name = re.sub(r"\s*\|\s*Facebook.*$", "", html.unescape(tag_title.group(1))).strip()
-                        if c_name and c_name.lower() not in ["facebook", "log in", "đăng nhập"]:
-                            result["name"] = c_name
-
-                # 2. Avatar
-                m_img = re.search(r'<meta\s+(?:property|name)="og:image"\s+content="([^"]*)"', txt, re.IGNORECASE)
-                if m_img:
-                    result["avatar"] = html.unescape(m_img.group(1))
-
-                # 3. Follower & Bio từ og:description
-                m_desc = re.search(r'<meta\s+(?:property|name)="og:description"\s+content="([^"]*)"', txt, re.IGNORECASE)
-                if m_desc:
-                    desc = html.unescape(m_desc.group(1).strip())
-                    fol_m = re.search(r'([0-9.,]+[KMBkmb]?)\s*(?:người theo dõi|Followers|followers|người đang theo dõi)', desc, re.IGNORECASE)
-                    if fol_m:
-                        result["followers"] = fol_m.group(1).replace(".", "").replace(",", "").strip()
-                    if desc and not desc.lower().startswith("facebook") and "tham gia facebook" not in desc.lower():
-                        result["bio"] = desc
-
-                # Quét follower thêm trong JSON
-                if not result["followers"]:
-                    fol_json = (
-                        re.search(r'"subscriber_count":\s*(\d+)', txt) or
-                        re.search(r'"follower_count":\s*(\d+)', txt) or
-                        re.search(r'"followers":\s*\{\s*"count":\s*(\d+)', txt) or
-                        re.search(r'([0-9.,]+)\s*(?:người theo dõi|Followers)', txt)
-                    )
-                    if fol_json:
-                        result["followers"] = fol_json.group(1).replace(".", "").replace(",", "").strip()
-
-                # 4. Nơi sinh sống (Lives in / Sống tại)
-                m_loc = (
-                    re.search(r'"current_city":\s*\{[^}]*"name":\s*"([^"]+)"', txt) or
-                    re.search(r'"current_city":\s*\{[^}]*"text":\s*"([^"]+)"', txt) or
-                    re.search(r'Sống tại\s+<a[^>]*>([^<]+)</a>', txt, re.IGNORECASE) or
-                    re.search(r'Sống tại\s+([A-ZÀ-Ỹa-zà-ỹ0-9\s,.-]+?)(?:<|\n|"|•|Quê|Đến từ)', txt) or
-                    re.search(r'Lives in\s+<a[^>]*>([^<]+)</a>', txt, re.IGNORECASE) or
-                    re.search(r'Lives in\s+([A-Za-z0-9\s,.-]+?)(?:<|\n|"|•|From)', txt)
-                )
-                if m_loc:
-                    val = m_loc.group(1).strip()
-                    if len(val) < 60:
-                        result["location"] = val
-
-                # 5. Quê quán (Hometown / Đến từ)
-                m_home = (
-                    re.search(r'"hometown":\s*\{[^}]*"name":\s*"([^"]+)"', txt) or
-                    re.search(r'"hometown":\s*\{[^}]*"text":\s*"([^"]+)"', txt) or
-                    re.search(r'Đến từ\s+<a[^>]*>([^<]+)</a>', txt, re.IGNORECASE) or
-                    re.search(r'Đến từ\s+([A-ZÀ-Ỹa-zà-ỹ0-9\s,.-]+?)(?:<|\n|"|•|Sống tại)', txt) or
-                    re.search(r'From\s+<a[^>]*>([^<]+)</a>', txt, re.IGNORECASE) or
-                    re.search(r'From\s+([A-Za-z0-9\s,.-]+?)(?:<|\n|"|•|Lives in)', txt)
-                )
-                if m_home:
-                    val = m_home.group(1).strip()
-                    if len(val) < 60:
-                        result["hometown"] = val
-
-                # 6. Tích xanh
-                if (
-                    re.search(r'"(?:is_verified|is_blue_badge_verified)":\s*true', txt, re.IGNORECASE) or
-                    re.search(r'"verification_status":\s*"blue_verified"', txt, re.IGNORECASE) or
-                    'aria-label="Đã xác minh"' in txt or
-                    'aria-label="Verified"' in txt or
-                    'verified badge' in txt.lower()
-                ):
-                    result["verified"] = True
-
-    except Exception as e:
-        logger.warning(f"Lỗi deep crawl fb: {e}")
-
-    return result
-
-
-async def fetch_fb_info(uid: str) -> dict | None:
-    session = await get_http_session()
-    result = {
-        "id": uid,
-        "name": None,
-        "gender": None,
-        "followers": None,
-        "created_time": None,
-        "hometown": None,
-        "location": None,
-        "about": None,
-        "work": None,
-        "education": None,
-        "verified": False,
-        "username": None,
-        "social_links": [],
-        "avatar_url": None,
-    }
-
-    # 1. Gọi trực tiếp API dịch vụ chuyên dụng
-    lookup_urls = [
-        f"https://subgiare.vn/api/service/facebook/get-uid-info?uid={uid}",
-        f"https://ffb.vn/api/tool/get-info-fb?uid={uid}",
-    ]
-    for target in lookup_urls:
-        try:
-            async with session.get(target, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    j = await resp.json(content_type=None)
-                    box = j.get("data") if isinstance(j.get("data"), dict) else j
-                    if box:
-                        if not result["name"] and box.get("name"):
-                            result["name"] = str(box["name"]).strip()
-                        if not result["followers"]:
-                            fol = box.get("followers") or box.get("sub")
-                            if fol:
-                                result["followers"] = re.sub(r"[^\d]", "", str(fol))
-                        if not result["location"] and (box.get("location") or box.get("city")):
-                            result["location"] = str(box.get("location") or box.get("city")).strip()
-                        if not result["hometown"] and box.get("hometown"):
-                            result["hometown"] = str(box["hometown"]).strip()
-                        if box.get("is_verified") or box.get("verified"):
-                            result["verified"] = True
-                        if box.get("gender"):
-                            result["gender"] = box.get("gender")
-        except Exception:
-            pass
-
-    # 2. Cào dữ liệu sâu bù đắp các trường còn thiếu
-    scraped = await scrape_fb_deep_profile(uid)
-    if not result["name"] and scraped.get("name"):
-        result["name"] = scraped["name"]
-    if not result["followers"] and scraped.get("followers"):
-        result["followers"] = scraped["followers"]
-    if not result["location"] and scraped.get("location"):
-        result["location"] = scraped["location"]
-    if not result["hometown"] and scraped.get("hometown"):
-        result["hometown"] = scraped["hometown"]
-    if scraped.get("verified"):
-        result["verified"] = True
-    if scraped.get("bio"):
-        result["about"] = scraped["bio"]
-    if scraped.get("avatar"):
-        result["avatar_url"] = scraped["avatar"]
-
-    if not result["avatar_url"]:
-        result["avatar_url"] = f"https://graph.facebook.com/{uid}/picture?width=720&height=720&access_token={FB_TOKENS[0]}"
-
-    if not result["name"]:
-        result["name"] = f"Người dùng Facebook ({uid})"
-
-    return result
-
-
-def format_fb_info_panel(data: dict) -> tuple[str, str]:
-    uid = str(data.get("id", "—"))
-    name = html.escape(str(data.get("name") or "Người dùng Facebook"))
-    username = html.escape(str(data.get("username") or "—"))
-    raw_gender = data.get("gender")
-    gender_map = {"male": "Nam 🚹", "female": "Nữ 🚺"}
-    gender = gender_map.get(str(raw_gender).lower(), "Không công khai 🔒")
-
-    raw_fol = data.get("followers")
-    if raw_fol:
-        clean_fol = re.sub(r"[^\d]", "", str(raw_fol))
-        if clean_fol.isdigit() and int(clean_fol) > 0:
-            followers_str = f"<b>{int(clean_fol):,}</b> người theo dõi"
-        else:
-            followers_str = f"<b>{raw_fol}</b> người theo dõi"
-    else:
-        followers_str = "<i>Không công khai hoặc đã ẩn follow</i>"
-
-    created_str = estimate_fb_creation_details(uid)
-    badge = "💎 ĐÃ XÁC MINH (TÍCH XANH ✅)" if data.get("verified") else "⚪ CHƯA XÁC MINH (KHÔNG TÍCH ❌)"
-    avatar_url = data.get("avatar_url") or f"https://graph.facebook.com/{uid}/picture?type=large"
-
-    location_str = html.escape(str(data.get("location") or "Không công khai 🔒"))
-    hometown_str = html.escape(str(data.get("hometown") or "Không công khai 🔒"))
-    bio_str = html.escape(str(data.get("about") or "Không có tiểu sử."))
-
-    panel = (
-        f"╭━━━〔 🔵 <b>FACEBOOK PRO OSINT</b> 〕━━━╮\n"
-        f"┃\n"
-        f"┣ 👤 <b>Họ tên:</b> <b>{name}</b>\n"
-        f"┣ 🆔 <b>UID:</b> <code>{uid}</code>\n"
-        f"┣ 🔗 <b>Username:</b> <code>{username}</code>\n"
-        f"┣ 🚻 <b>Giới tính:</b> {gender}\n"
-        f"┣ 🛡️ <b>Trạng thái:</b> <code>{badge}</code>\n"
-        f"┃\n"
-        f"┣ 👥 <b>Người theo dõi:</b> {followers_str}\n"
-        f"┣ 🗓️ <b>Ước tính tạo nick:</b> <code>{created_str}</code>\n"
-        f"┃\n"
-        f"┣ 📍 <b>Nơi sinh sống:</b> {location_str}\n"
-        f"┣ 🏡 <b>Quê quán:</b> {hometown_str}\n"
-        f"┃\n"
-        f"┣ 📝 <b>Tiểu sử / Giới thiệu:</b>\n"
-        f"┃ <i>« {bio_str} »</i>\n"
-        f"┃\n"
-        f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n"
-        f"👉 <b>Profile:</b> <a href='https://facebook.com/{uid}'>fb.com/{uid}</a>"
-    )
-    return truncate_text(panel, 1020), avatar_url
-
-
 # ================= LOGIC TIKTOK ĐA TẦNG =================
 async def resolve_tiktok_url(url: str) -> str:
-    """Giải mã link rút gọn TikTok vt/vm để lấy URL đầy đủ."""
     session = await get_http_session()
     clean = url.strip()
     try:
@@ -954,7 +582,6 @@ async def resolve_tiktok_url(url: str) -> str:
 
 
 async def tikwm_req(params: dict):
-    """API 1: TikWM Gateway."""
     session = await get_http_session()
     url = TIKWM_BASE
     post_headers = {
@@ -984,7 +611,6 @@ async def tikwm_req(params: dict):
 
 
 async def cobalt_tik_download(tiktok_url: str):
-    """API 2: Cobalt Core Engine."""
     session = await get_http_session()
     cobalt_instances = [
         "https://api.cobalt.tools/api/json",
@@ -1030,7 +656,6 @@ async def cobalt_tik_download(tiktok_url: str):
 
 
 async def lovetik_fallback_download(tiktok_url: str):
-    """API 3: LoveTik Gateway."""
     session = await get_http_session()
     api_url = "https://lovetik.com/api/ajax/search"
     payload = {"query": tiktok_url}
@@ -1083,7 +708,6 @@ async def lovetik_fallback_download(tiktok_url: str):
 
 
 def ytdlp_tiktok_extract(url: str):
-    """API 4: Trực tiếp bằng yt-dlp native."""
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -1132,7 +756,6 @@ def ytdlp_tiktok_extract(url: str):
 
 
 async def get_tiktok_universal_data(raw_url: str):
-    """Trình điều phối tải video TikTok đa tầng chống lỗi."""
     clean_url = await resolve_tiktok_url(raw_url)
 
     # 1. TikWM
@@ -1182,7 +805,7 @@ def get_tiktok_creation_time(uid: str) -> str:
             return dt.strftime("%Y-%m-%d | %H:%M:%S")
     except Exception:
         pass
-    return "Không xác định 🔒"
+    return "Không xác định"
 
 
 def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
@@ -1191,9 +814,9 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     if not data or data.get("error"):
         err = data.get("error", "Người dùng không tồn tại hoặc API bận.")
         return (
-            f"╭━━━〔 ❌ <b>TRA CỨU THẤT BẠI</b> 〕━━━╮\n"
-            f"┃ 👤 <b>Tài khoản:</b> <code>@{clean_user}</code>\n"
-            f"┃ ⚠️ <b>Chi tiết:</b> <i>{html.escape(str(err))}</i>\n"
+            f"╭━━━〔 {E_ALERT} <b>TRA CỨU THẤT BẠI</b> 〕━━━╮\n"
+            f"┃ {E_PIN} <b>Tài khoản:</b> <code>@{clean_user}</code>\n"
+            f"┃ {E_ALERT} <b>Chi tiết:</b> <i>{html.escape(str(err))}</i>\n"
             f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯",
             None,
         )
@@ -1206,13 +829,13 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     uid = str(u.get("id") or u.get("uid") or "0")
 
     is_private = u.get("privateAccount") or u.get("is_private") or False
-    status_str = "🔒 Riêng tư" if is_private else "🌐 Công khai"
+    status_str = "🔒 Riêng tư" if is_private else f"{E_SPARKLE} Công khai"
     is_verified = u.get("verified") or u.get("customVerify") or False
-    verified_str = "✅ Đã xác minh" if is_verified else "❌ Chưa xác minh"
+    verified_str = f"{E_VERIFIED} Đã xác minh" if is_verified else f"{E_ALERT} Chưa xác minh"
     language = html.escape(str(u.get("language") or u.get("region") or "vi").lower())
     bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
     has_shop = u.get("commerceUserInfo", {}).get("commerceUser") or u.get("is_star") or False
-    shop_str = "✅ Có gian hàng" if has_shop else "❌ Không có"
+    shop_str = f"{E_VERIFIED} Có gian hàng" if has_shop else "❌ Không có"
 
     followers = s.get("followerCount") or s.get("followers") or 0
     following = s.get("followingCount") or s.get("following") or 0
@@ -1223,23 +846,23 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     avatar = u.get("avatarLarger") or u.get("avatarMedium") or u.get("avatarThumb") or u.get("avatar")
 
     panel = (
-        f"╭━━━〔 🎵 <b>TIKTOK PROFILE STATS</b> 〕━━━╮\n"
+        f"╭━━━〔 {E_SPARKLE} <b>TIKTOK PROFILE STATS</b> 〕━━━╮\n"
         f"┃\n"
-        f"┣ 👤 <b>Tên hiển thị:</b> <b>{nickname}</b>\n"
-        f"┣ 🆔 <b>ID người dùng:</b> <code>{uid}</code>\n"
-        f"┣ 🔒 <b>Trạng thái:</b> {status_str}\n"
-        f"┣ ✅ <b>Huy hiệu:</b> {verified_str}\n"
-        f"┣ 🛒 <b>Cửa hàng:</b> {shop_str}\n"
+        f"┣ {E_PIN} <b>Tên hiển thị:</b> <b>{nickname}</b>\n"
+        f"┣ {E_BOLT} <b>ID người dùng:</b> <code>{uid}</code>\n"
+        f"┣ {E_SPARKLE} <b>Trạng thái:</b> {status_str}\n"
+        f"┣ {E_VERIFIED} <b>Huy hiệu:</b> {verified_str}\n"
+        f"┣ {E_FIRE} <b>Cửa hàng:</b> {shop_str}\n"
         f"┣ 🌐 <b>Khu vực:</b> <code>{language.upper()}</code>\n"
         f"┃\n"
         f"┣ 📊 <b>Số liệu tương tác:</b>\n"
         f"┃ ├ 👥 Follower: <code>{followers:,}</code>\n"
         f"┃ ├ 👤 Following: <code>{following:,}</code>\n"
         f"┃ ├ 🎥 Video: <code>{videos:,}</code> clips\n"
-        f"┃ └ ❤️ Yêu thích: <code>{hearts:,}</code> likes\n"
+        f"┃ └ {E_HEART} Yêu thích: <code>{hearts:,}</code> likes\n"
         f"┃\n"
         f"┣ ⏰ <b>Thời gian tạo:</b> <code>{created_time_str}</code>\n"
-        f"┣ 📝 <b>Tiểu sử:</b>\n"
+        f"┣ {E_PIN} <b>Tiểu sử:</b>\n"
         f"┃ <i>« {bio} »</i>\n"
         f"┃\n"
         f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n"
@@ -1254,21 +877,20 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
     display_name = html.escape(user_name)
     panel = (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"┃   🌟 <b>TIKTOK & FB & YOUTUBE TOOLKIT</b> 🌟   ┃\n"
+        f"┃   {E_SPARKLE} <b>TIKTOK & YOUTUBE TOOLKIT</b> {E_SPARKLE}   ┃\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
         f"👋 <i>Xin chào,</i> <b>{display_name}</b>!\n"
-        f"Chào mừng bạn đến với hệ thống bot tiện ích tự động đa nền tảng.\n\n"
-        f"╭━━━〔 🛠️️ <b>DANH SÁCH TÍNH NĂNG</b> 〕━━━╮\n"
-        f"┣ 🎶 <b>Tải nhạc YouTube:</b> <code>/sing &lt;tên bài&gt;</code>\n"
+        f"Chào mừng bạn đến với hệ thống bot tiện ích tự động chất lượng cao.\n\n"
+        f"╭━━━〔 {E_FIRE} <b>DANH SÁCH TÍNH NĂNG</b> 〕━━━╮\n"
+        f"┣ {E_MUSIC} <b>Tải nhạc YouTube:</b> <code>/sing &lt;tên bài&gt;</code>\n"
         f"┣ 📥 <b>Tải TikTok HD:</b> Gửi link trực tiếp (No logo)\n"
-        f"┣ 🎵 <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
-        f"┣ 🔎 <b>Tra cứu TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
-        f"┣ 🔵 <b>Tra cứu Facebook:</b> <code>/fb &lt;link/uid&gt;</code>\n"
+        f"┣ {E_MUSIC} <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
+        f"┣ {E_SEARCH} <b>Tra cứu TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
         f"┣ 🧹 <b>Dọn rác bộ nhớ:</b> <code>/cleanup</code>\n"
         f"┣ 📊 <b>Status máy chủ:</b> <code>/status</code>\n"
-        f"┣ 💖 <b>Ủng hộ Admin:</b> <code>/donate</code>\n"
+        f"┣ {E_HEART} <b>Ủng hộ Admin:</b> <code>/donate</code>\n"
         f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n"
-        f"⚡ <b>Hệ thống:</b> <i>Railway High-Speed Core • Độc quyền</i>"
+        f"{E_BOLT} <b>Hệ thống:</b> <i>Railway High-Speed Core • Độc quyền</i>"
     )
 
     keyboard = [
@@ -1281,11 +903,10 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
             InlineKeyboardButton("🔎 Check TikTok", callback_data="panel_guide_info"),
         ],
         [
-            InlineKeyboardButton("🔵 Check Facebook", callback_data="panel_guide_fb"),
             InlineKeyboardButton("🧹 Dọn Rác Máy Chủ", callback_data="panel_cleanup"),
+            InlineKeyboardButton("📊 Server Status", callback_data="panel_status"),
         ],
         [
-            InlineKeyboardButton("📊 Server Status", callback_data="panel_status"),
             InlineKeyboardButton("💖 Ủng Hộ (Donate)", callback_data="panel_donate"),
         ],
     ]
@@ -1296,8 +917,8 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
 async def run_system_cleanup(status_msg, start_req_time: float):
     try:
         await status_msg.edit_text(
-            "🧹 <b>[Bước 1/3] Đang thu hồi bộ nhớ RAM và dọn Python GC...</b>\n"
-            "⏳ <i>Vui lòng đợi 3 giây...</i>",
+            f"🧹 <b>[Bước 1/3] Đang thu hồi bộ nhớ RAM và dọn Python GC...</b>\n"
+            f"⏳ <i>Vui lòng đợi 3 giây...</i>",
             parse_mode=ParseMode.HTML,
         )
         collected = gc.collect()
@@ -1305,8 +926,8 @@ async def run_system_cleanup(status_msg, start_req_time: float):
         await asyncio.sleep(3)
 
         await status_msg.edit_text(
-            "🗄️ <b>[Bước 2/3] Đang quét và xóa toàn bộ file tạm media trên ổ đĩa...</b>\n"
-            "⏳ <i>Vui lòng đợi 3 giây...</i>",
+            f"🗄️ <b>[Bước 2/3] Đang quét và xóa toàn bộ file tạm media trên ổ đĩa...</b>\n"
+            f"⏳ <i>Vui lòng đợi 3 giây...</i>",
             parse_mode=ParseMode.HTML,
         )
         loop = asyncio.get_running_loop()
@@ -1316,8 +937,8 @@ async def run_system_cleanup(status_msg, start_req_time: float):
         await asyncio.sleep(3)
 
         await status_msg.edit_text(
-            "📊 <b>[Bước 3/3] Đang cập nhật dung lượng hệ thống...</b>\n"
-            "⏳ <i>Vui lòng đợi 2 giây...</i>",
+            f"📊 <b>[Bước 3/3] Đang cập nhật dung lượng hệ thống...</b>\n"
+            f"⏳ <i>Vui lòng đợi 2 giây...</i>",
             parse_mode=ParseMode.HTML,
         )
         await asyncio.sleep(2)
@@ -1327,19 +948,19 @@ async def run_system_cleanup(status_msg, start_req_time: float):
 
         speed_line = get_speed_tag(start_req_time)
         result_text = (
-            f"╭━━━〔 ✅ <b>GIẢI PHÓNG DUNG LƯỢNG</b> 〕━━━╮\n"
+            f"╭━━━〔 {E_VERIFIED} <b>GIẢI PHÓNG DUNG LƯỢNG</b> 〕━━━╮\n"
             f"┃\n"
             f"┣ 🗑️ <b>Số tệp tạm đã xóa:</b> <code>{del_count}</code> files\n"
             f"┣ 📦 <b>Dung lượng dọn sạch:</b> <code>{freed_mb} MB</code>\n"
             f"┣ 💾 <b>Ổ đĩa trống còn lại:</b> <code>{free_gb} GB</code>\n"
-            f"┣ ⚡ <b>Trạng thái:</b> Sẵn sàng nhận lệnh mới\n"
+            f"┣ {E_BOLT} <b>Trạng thái:</b> Sẵn sàng nhận lệnh mới\n"
             f"┃{speed_line}\n"
             f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
         )
         await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Lỗi khi dọn rác hệ thống: {e}")
-        await status_msg.edit_text(f"❌ Quá trình dọn rác gặp sự cố: {e}")
+        await status_msg.edit_text(f"{E_ALERT} Quá trình dọn rác gặp sự cố: {e}", parse_mode=ParseMode.HTML)
 
 
 async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1358,7 +979,7 @@ async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     speed_line = get_speed_tag(t0)
     caption = (
-        f"╭━━━〔 💖 <b>ỦNG HỘ PHÁT TRIỂN BOT</b> 〕━━━╮\n"
+        f"╭━━━〔 {E_HEART} <b>ỦNG HỘ PHÁT TRIỂN BOT</b> 〕━━━╮\n"
         f"┃\n"
         f"┣ Cảm ơn bạn đã luôn đồng hành cùng bot!\n"
         f"┣ Mọi khoản donate dù nhỏ đều là động lực lớn\n"
@@ -1451,7 +1072,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Lỗi gửi ảnh status: {e}")
-        await update.message.reply_text("❌ Không thể tạo hoặc gửi ảnh status.")
+        await update.message.reply_text(f"{E_ALERT} Không thể tạo hoặc gửi ảnh status.", parse_mode=ParseMode.HTML)
 
 
 async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1482,13 +1103,13 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_sing":
         text = (
-            "╭━━━〔 🎶 <b>TÌM VÀ TẢI NHẠC YOUTUBE</b> 〕━━━╮\n"
-            "┃\n"
-            "┣ 📌 <b>Cú pháp:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
-            "┣ 💡 <i>Ví dụ:</i> <code>/sing Tắt đèn đi</code>\n"
-            "┣ 🛡️ Tự động nén âm thanh, chống nghẽn đĩa.\n"
+            f"╭━━━〔 {E_MUSIC} <b>TÌM VÀ TẢI NHẠC YOUTUBE</b> 〕━━━╮\n"
+            f"┃\n"
+            f"┣ {E_PIN} <b>Cú pháp:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
+            f"┣ {E_SPARKLE} <i>Ví dụ:</i> <code>/sing Tắt đèn đi</code>\n"
+            f"┣ {E_VERIFIED} Tự động nén âm thanh, chống nghẽn đĩa.\n"
             f"┃{get_speed_tag(t0)}\n"
-            "╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+            f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1497,13 +1118,13 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_down":
         text = (
-            "╭━━━〔 📥 <b>TẢI VIDEO TIKTOK FULL HD</b> 〕━━━╮\n"
-            "┃\n"
-            "┣ • Chỉ cần gửi trực tiếp link TikTok vào ô chat.\n"
-            "┣ • Tự động loại bỏ Watermark / Logo chuẩn 1080p.\n"
-            "┣ • Hỗ trợ cả Album ảnh Slide và link rút gọn.\n"
+            f"╭━━━〔 📥 <b>TẢI VIDEO TIKTOK FULL HD</b> 〕━━━╮\n"
+            f"┃\n"
+            f"┣ • Chỉ cần gửi trực tiếp link TikTok vào ô chat.\n"
+            f"┣ • {E_VERIFIED} Tự động loại bỏ Watermark / Logo chuẩn 1080p.\n"
+            f"┣ • Hỗ trợ cả Album ảnh Slide và link rút gọn.\n"
             f"┃{get_speed_tag(t0)}\n"
-            "╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+            f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1512,13 +1133,13 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_music":
         text = (
-            "╭━━━〔 🎵 <b>TRÍCH XUẤT AUDIO TIKTOK</b> 〕━━━╮\n"
-            "┃\n"
-            "┣ 📌 <b>Cú pháp:</b> <code>/music &lt;link_tiktok&gt;</code>\n"
-            "┣ • Hoặc bấm nút <b>[Tải nhạc MP3]</b> bên dưới video.\n"
-            "┣ • File âm thanh 320kbps sắc nét.\n"
+            f"╭━━━〔 {E_MUSIC} <b>TRÍCH XUẤT AUDIO TIKTOK</b> 〕━━━╮\n"
+            f"┃\n"
+            f"┣ {E_PIN} <b>Cú pháp:</b> <code>/music &lt;link_tiktok&gt;</code>\n"
+            f"┣ • Hoặc bấm nút <b>[Tải nhạc MP3]</b> bên dưới video.\n"
+            f"┣ • {E_BOLT} File âm thanh 320kbps sắc nét.\n"
             f"┃{get_speed_tag(t0)}\n"
-            "╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+            f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1527,28 +1148,13 @@ async def handle_panel_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "panel_guide_info":
         text = (
-            "╭━━━〔 🔎 <b>TRA CỨU TIKTOK PROFILE</b> 〕━━━╮\n"
-            "┃\n"
-            "┣ 📌 <b>Cú pháp:</b> <code>/getinfo &lt;username&gt;</code>\n"
-            "┣ 💡 <i>Ví dụ:</i> <code>/getinfo tiktok</code>\n"
-            "┣ • Quét thời gian tạo nick, số follower & lượt thích.\n"
+            f"╭━━━〔 {E_SEARCH} <b>TRA CỨU TIKTOK PROFILE</b> 〕━━━╮\n"
+            f"┃\n"
+            f"┣ {E_PIN} <b>Cú pháp:</b> <code>/getinfo &lt;username&gt;</code>\n"
+            f"┣ {E_SPARKLE} <i>Ví dụ:</i> <code>/getinfo tiktok</code>\n"
+            f"┣ • {E_VERIFIED} Quét thời gian tạo nick, số follower & lượt thích.\n"
             f"┃{get_speed_tag(t0)}\n"
-            "╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
-        )
-        try:
-            await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
-        except Exception:
-            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
-
-    elif data == "panel_guide_fb":
-        text = (
-            "╭━━━〔 🔵 <b>TRA CỨU PROFILE FACEBOOK</b> 〕━━━╮\n"
-            "┃\n"
-            "┣ 📌 <b>Cú pháp:</b> <code>/fb &lt;link_profile_hoặc_uid&gt;</code>\n"
-            "┣ 💡 <i>Ví dụ:</i> <code>/fb 4</code> hoặc link trang cá nhân.\n"
-            "┣ • Tích hợp engine đa luồng quét số Follower thật.\n"
-            f"┃{get_speed_tag(t0)}\n"
-            "╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+            f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
         )
         try:
             await query.message.edit_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(back_btn))
@@ -1596,9 +1202,9 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not context.args:
         help_panel = (
-            f"╔════════ ⚠️ <b>THIẾU TÊN BÀI HÁT</b> ════════╗\n"
-            f"║ 📌 <b>Cú pháp:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
-            f"║ 💡 <i>Ví dụ: <code>/sing Tắt đèn đi</code></i>\n"
+            f"╔════════ {E_ALERT} <b>THIẾU TÊN BÀI HÁT</b> ════════╗\n"
+            f"║ {E_PIN} <b>Cú pháp:</b> <code>/sing &lt;tên bài hát&gt;</code>\n"
+            f"║ {E_SPARKLE} <i>Ví dụ: <code>/sing Tắt đèn đi</code></i>\n"
             f"╚════════════════════════════════════╝\n"
             f"{get_speed_tag(t0)}"
         )
@@ -1609,17 +1215,17 @@ async def cmd_sing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyword = " ".join(context.args).strip()
-    status_msg = await update.message.reply_text(f"🔍 <i>Đang tìm kiếm:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
+    status_msg = await update.message.reply_text(f"{E_SEARCH} <i>Đang tìm kiếm:</i> <b>{html.escape(keyword)}</b>...", parse_mode=ParseMode.HTML)
 
     results = await search_youtube_fast(keyword, 6)
 
     if not results:
-        await status_msg.edit_text(f"❌ Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text(f"{E_ALERT} Không tìm thấy bài hát phù hợp. Vui lòng thử từ khóa khác!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     context.bot_data[f"kw_{update.effective_chat.id}"] = keyword
 
-    msg_lines = [f"🎶 <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
+    msg_lines = [f"{E_MUSIC} <b>KẾT QUẢ TÌM KIẾM CHO:</b> <i>{html.escape(keyword)}</i>\n<code>────────────────────────────</code>"]
     keyboard = []
     row = []
 
@@ -1670,7 +1276,7 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
     saved_kw = context.bot_data.get(f"kw_{query.message.chat_id}", "")
 
     loading_msg = await query.message.reply_text(
-        "⏳ <i>Đang bóc tách audio (Tự động nén tối ưu dung lượng)...</i>",
+        f"⏳ <i>Đang bóc tách audio ({E_BOLT} Tự động nén tối ưu dung lượng)...</i>",
         parse_mode=ParseMode.HTML
     )
 
@@ -1680,7 +1286,7 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
     await loading_msg.delete()
 
     if not stream_file:
-        await query.message.reply_text(f"❌ Không thể tải được bài hát này hoặc vượt quá dung lượng. Hãy chọn bài khác!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await query.message.reply_text(f"{E_ALERT} Không thể tải được bài hát này hoặc vượt quá dung lượng. Hãy chọn bài khác!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     title = html.escape(details.get("title", "YouTube Track"))
@@ -1688,10 +1294,10 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
 
     speed_line = get_speed_tag(t0)
     caption = (
-        f"╭━━━〔 🎶 <b>AUDIO TRACK EXTRACTED</b> 〕━━━╮\n"
+        f"╭━━━〔 {E_MUSIC} <b>AUDIO TRACK EXTRACTED</b> 〕━━━╮\n"
         f"┃ 🎼 <b>Bài hát:</b> <b>{title}</b>\n"
         f"┃ 👤 <b>Nghệ sĩ:</b> {uploader}\n"
-        f"┃ 🛡️ <b>Tối ưu:</b> Nén tự động chống tràn đĩa\n"
+        f"┃ {E_VERIFIED} <b>Tối ưu:</b> Nén tự động chống tràn đĩa\n"
         f"┃ 🔗 <b>Nguồn:</b> <a href='{target_url}'>Media Source</a>\n"
         f"┃{speed_line}\n"
         f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
@@ -1707,55 +1313,7 @@ async def handle_youtube_download_callback(update: Update, context: ContextTypes
         )
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
-        await query.message.reply_text(f"❌ Kích thước tệp âm thanh vượt quá giới hạn gửi của Telegram.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
-
-
-# ================= LỆNH /fb =================
-async def cmd_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        return
-
-    t0 = time.perf_counter()
-    if not context.args:
-        help_panel = (
-            f"╔════════ ⚠️ <b>THIẾU THAM SỐ</b> ════════╗\n"
-            f"║ 📌 <b>Cú pháp:</b> <code>/fb &lt;link_hoặc_uid&gt;</code>\n"
-            f"║ 💡 <i>Ví dụ: <code>/fb 4</code> hoặc link tài khoản</i>\n"
-            f"╚════════════════════════════════════╝\n"
-            f"{get_speed_tag(t0)}"
-        )
-        try:
-            await update.message.reply_photo(photo=IMG_FB, caption=help_panel, parse_mode=ParseMode.HTML)
-        except Exception:
-            await update.message.reply_text(help_panel, parse_mode=ParseMode.HTML)
-        return
-
-    input_data = context.args[0].strip()
-    status_msg = await update.message.reply_text("⏳ <i>Đang bóc tách UID Facebook...</i>", parse_mode=ParseMode.HTML)
-
-    uid = await get_fb_id(input_data)
-    if not uid:
-        await status_msg.edit_text(f"❌ Không thể giải mã UID. Hãy kiểm tra lại link tài khoản!\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
-        return
-
-    await status_msg.edit_text(f"📡 <i>Đang quét thông tin chuyên sâu cho UID:</i> <code>{uid}</code>...", parse_mode=ParseMode.HTML)
-    data = await fetch_fb_info(uid)
-
-    if not data:
-        await status_msg.edit_text(f"❌ Không lấy được thông tin từ profile này.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
-        return
-
-    report, avatar_url = format_fb_info_panel(data)
-    report += f"\n{get_speed_tag(t0)}"
-    await status_msg.delete()
-
-    try:
-        await update.message.reply_photo(photo=avatar_url, caption=report, parse_mode=ParseMode.HTML)
-    except Exception:
-        try:
-            await update.message.reply_photo(photo=IMG_FB, caption=report, parse_mode=ParseMode.HTML)
-        except Exception:
-            await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+        await query.message.reply_text(f"{E_ALERT} Kích thước tệp âm thanh vượt quá giới hạn gửi của Telegram.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
 
 
 # ================= CALLBACK TẢI NHẠC TIKTOK =================
@@ -1771,7 +1329,7 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
     api_res = await get_tiktok_universal_data(tik_url)
 
     if not api_res or not api_res.get("data"):
-        await query.message.reply_text(f"❌ Không lấy được audio từ video này.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await query.message.reply_text(f"{E_ALERT} Không lấy được audio từ video này.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     res = api_res["data"]
@@ -1779,7 +1337,7 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
     music_url = ensure_full_url(raw_music)
 
     if not music_url:
-        await query.message.reply_text(f"❌ Video này bị tắt tiếng hoặc không có track âm thanh riêng.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await query.message.reply_text(f"{E_ALERT} Video này bị tắt tiếng hoặc không có track âm thanh riêng.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     music_title = html.escape(res.get("music_info", {}).get("title") or "TikTok Audio")
@@ -1787,10 +1345,10 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
 
     speed_line = get_speed_tag(t0)
     audio_panel = (
-        f"╭━━━〔 🎵 <b>TIKTOK AUDIO EXTRACTED</b> 〕━━━╮\n"
+        f"╭━━━〔 {E_MUSIC} <b>TIKTOK AUDIO EXTRACTED</b> 〕━━━╮\n"
         f"┃ 🎼 <b>Bài hát:</b> <b>{music_title}</b>\n"
         f"┃ 👤 <b>Nghệ sĩ:</b> {music_author}\n"
-        f"┃ 🆔 <b>ID:</b> <code>{video_id}</code>\n"
+        f"┃ {E_BOLT} <b>ID:</b> <code>{video_id}</code>\n"
         f"┃{speed_line}\n"
         f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
     )
@@ -1818,7 +1376,7 @@ async def handle_download_music_callback(update: Update, context: ContextTypes.D
             )
     except Exception as e:
         logger.error(f"Lỗi gửi audio callback: {e}")
-        await query.message.reply_text(f"❌ Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await query.message.reply_text(f"{E_ALERT} Lỗi gửi audio: Không thể chuyển tiếp file từ CDN.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
 
 
 # ================= LỆNH /music =================
@@ -1829,9 +1387,9 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not context.args:
         help_panel = (
-            f"╔════════ ⚠️ <b>THIẾU ĐƯỜNG LINK</b> ════════╗\n"
-            f"║ 📌 <b>Cú pháp:</b> <code>/music &lt;link_tiktok&gt;</code>\n"
-            f"║ 💡 <i>Ví dụ: <code>/music https://vt.tiktok.com/...</code></i>\n"
+            f"╔════════ {E_ALERT} <b>THIẾU ĐƯỜNG LINK</b> ════════╗\n"
+            f"║ {E_PIN} <b>Cú pháp:</b> <code>/music &lt;link_tiktok&gt;</code>\n"
+            f"║ {E_SPARKLE} <i>Ví dụ: <code>/music https://vt.tiktok.com/...</code></i>\n"
             f"╚════════════════════════════════════╝\n"
             f"{get_speed_tag(t0)}"
         )
@@ -1843,7 +1401,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     raw_url = context.args[0].strip()
     if "tiktok.com" not in raw_url and "douyin.com" not in raw_url:
-        await update.message.reply_text(f"⚠️ Vui lòng cung cấp link TikTok hợp lệ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"{E_ALERT} Vui lòng cung cấp link TikTok hợp lệ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     msg = await update.message.reply_text("⏳ <i>Đang bóc tách file âm thanh gốc...</i>", parse_mode=ParseMode.HTML)
@@ -1851,7 +1409,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = await get_tiktok_universal_data(raw_url)
 
     if not data or not data.get("data"):
-        await msg.edit_text(f"❌ <b>Không trích xuất được:</b> Video riêng tư, bị xoá hoặc link không hợp lệ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await msg.edit_text(f"{E_ALERT} <b>Không trích xuất được:</b> Video riêng tư, bị xoá hoặc link không hợp lệ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     res = data["data"]
@@ -1859,7 +1417,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     music_url = ensure_full_url(raw_music)
 
     if not music_url:
-        await msg.edit_text(f"❌ Video này không có âm thanh hoặc bị tắt tiếng do bản quyền.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await msg.edit_text(f"{E_ALERT} Video này không có âm thanh hoặc bị tắt tiếng do bản quyền.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         return
 
     music_title = html.escape(res.get("music_info", {}).get("title") or "TikTok Audio")
@@ -1867,10 +1425,10 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     speed_line = get_speed_tag(t0)
     audio_panel = (
-        f"╭━━━〔 🎵 <b>TIKTOK AUDIO EXTRACTED</b> 〕━━━╮\n"
+        f"╭━━━〔 {E_MUSIC} <b>TIKTOK AUDIO EXTRACTED</b> 〕━━━╮\n"
         f"┃ 🎼 <b>Track:</b> <b>{music_title}</b>\n"
         f"┃ 👤 <b>Artist:</b> {music_author}\n"
-        f"┃ ⚡ <b>Format:</b> High Quality MP3\n"
+        f"┃ {E_BOLT} <b>Format:</b> High Quality MP3\n"
         f"┃{speed_line}\n"
         f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
     )
@@ -1899,7 +1457,7 @@ async def cmd_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.error(f"Lỗi gửi audio: {e}")
-        await update.message.reply_text(f"❌ Lỗi gửi file audio lên Telegram.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"{E_ALERT} Lỗi gửi file audio lên Telegram.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
 
 
 # ================= LỆNH /getinfo =================
@@ -1910,9 +1468,9 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t0 = time.perf_counter()
     if not context.args:
         help_panel = (
-            f"╔════════ ⚠️ <b>THIẾU THAM SỐ</b> ════════╗\n"
-            f"║ 📌 <b>Cú pháp:</b> <code>/getinfo &lt;username&gt;</code>\n"
-            f"║ 💡 <i>Ví dụ: <code>/getinfo tiktok</code></i>\n"
+            f"╔════════ {E_ALERT} <b>THIẾU THAM SỐ</b> ════════╗\n"
+            f"║ {E_PIN} <b>Cú pháp:</b> <code>/getinfo &lt;username&gt;</code>\n"
+            f"║ {E_SPARKLE} <i>Ví dụ: <code>/getinfo tiktok</code></i>\n"
             f"╚════════════════════════════════════╝\n"
             f"{get_speed_tag(t0)}"
         )
@@ -1924,7 +1482,7 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].strip().lstrip("@")
     status_msg = await update.message.reply_text(
-        f"⚡ <i>Đang quét dữ liệu người dùng</i> <code>@{html.escape(username)}</code>...",
+        f"{E_SEARCH} <i>Đang quét dữ liệu người dùng</i> <code>@{html.escape(username)}</code>...",
         parse_mode=ParseMode.HTML,
     )
 
@@ -1959,7 +1517,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         data = await get_tiktok_universal_data(raw_url)
 
         if not data or not data.get("data"):
-            await msg.edit_text(f"❌ <b>Tải thất bại:</b> Video riêng tư, bị xoá hoặc link không hỗ trợ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+            await msg.edit_text(f"{E_ALERT} <b>Tải thất bại:</b> Video riêng tư, bị xoá hoặc link không hỗ trợ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
             return
 
         res = data["data"]
@@ -1971,11 +1529,11 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         speed_line = get_speed_tag(t0)
         caption = (
             f"╭━━━〔 🎬 <b>TIKTOK HD DOWNLOAD</b> 〕━━━╮\n"
-            f"┃ 📝 <b>Tiêu đề:</b> {title}\n"
+            f"┃ {E_PIN} <b>Tiêu đề:</b> {title}\n"
             f"┃ 👤 <b>Tác giả:</b> {author}\n"
-            f"┃ 🎵 <b>Âm thanh:</b> <i>{music_title}</i>\n"
+            f"┃ {E_MUSIC} <b>Âm thanh:</b> <i>{music_title}</i>\n"
             f"┃\n"
-            f"┃ ❤️ <code>{res.get('digg_count', 0):,}</code> tym │ "
+            f"┃ {E_HEART} <code>{res.get('digg_count', 0):,}</code> tym │ "
             f"💬 <code>{res.get('comment_count', 0):,}</code> cmt │ "
             f"🔁 <code>{res.get('share_count', 0):,}</code> share\n"
             f"┃{speed_line}\n"
@@ -2010,13 +1568,11 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         video_url = ensure_full_url(raw_video_url)
 
         if not video_url:
-            await msg.edit_text(f"❌ Không trích xuất được link tải video.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+            await msg.edit_text(f"{E_ALERT} Không trích xuất được link tải video.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
             return
 
-        # Tải file về buffer RAM để Telegram gửi đi
         stream_video = await download_file_stream(video_url, max_size_mb=48)
 
-        # Fallback bằng yt-dlp nếu CDN bị chặn
         if not stream_video:
             def _ytdlp_direct_dl(u):
                 tmp = tempfile.gettempdir()
@@ -2056,9 +1612,9 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
             except Exception as e:
                 logger.error(f"Lỗi reply_video: {e}")
-                await update.message.reply_text(f"❌ Gặp lỗi khi tải video lên Telegram: {e}\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(f"{E_ALERT} Gặp lỗi khi tải video lên Telegram: {e}\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
         else:
-            await update.message.reply_text(f"❌ Video vượt quá 50MB hoặc bị TikTok giới hạn khu vực.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(f"{E_ALERT} Video vượt quá 50MB hoặc bị TikTok giới hạn khu vực.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
 
 
 # ================= KHỞI CHẠY BOT =================
@@ -2068,7 +1624,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: Auto Speed Tag + Donate + FB Real Follow   ║\n"
+        "║ Features: Custom Emojis + TikTok HD + Music Pipeline ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -2085,7 +1641,6 @@ def main():
     app.add_handler(CommandHandler("getinfo", cmd_getinfo))
     app.add_handler(CommandHandler("music", cmd_music))
     app.add_handler(CommandHandler("downmusic", cmd_music))
-    app.add_handler(CommandHandler("fb", cmd_fb))
 
     # Callbacks
     app.add_handler(CallbackQueryHandler(handle_youtube_download_callback, pattern="^ytdl_"))
