@@ -50,10 +50,10 @@ E_SEARCH  = '<tg-emoji emoji-id="6260215820933144560">🔍</tg-emoji>'
 E_ALERT   = '<tg-emoji emoji-id="6269253325477123346">⚠️</tg-emoji>'
 
 # ================= CẤU HÌNH TOKEN & API =================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAGtDVbFiZnkmp5xEIPmn9txu8yVFzdfv98").strip()
+BOT_TOKEN = os.getenv("8949220582:AAE6zt_01TePivwodfw7dVmSWn0prRCvFw8", "").strip()
 ALLOWED_USERS = []
 
-# Hỗ trợ truyền cookies.txt qua biến môi trường để tải YouTube/TikTok
+# Hỗ trợ truyền cookies.txt qua biến môi trường để tải YouTube/TikTok/Instagram
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
 COOKIE_FILE_PATH = None
 
@@ -68,7 +68,7 @@ if YT_COOKIES_ENV:
             with open(cookie_tmp, "w", encoding="utf-8") as f:
                 f.write(YT_COOKIES_ENV)
         COOKIE_FILE_PATH = cookie_tmp
-        logging.info("Đã nạp thành công YouTube/TikTok cookies từ biến môi trường.")
+        logging.info("Đã nạp thành công cookies từ biến môi trường.")
     except Exception as e:
         logging.warning(f"Không thể tạo file cookie: {e}")
 
@@ -155,7 +155,7 @@ def clean_temp_storage_files():
     freed_bytes = 0
     try:
         for fname in os.listdir(tmp_dir):
-            if fname.startswith(("ytdl_", "sc_", "yt_tmp_", "tik_")) or fname.endswith(
+            if fname.startswith(("ytdl_", "sc_", "yt_tmp_", "tik_", "ig_")) or fname.endswith(
                 (".mp4", ".mp3", ".webm", ".m4a", ".part", ".ytdl")
             ):
                 fpath = os.path.join(tmp_dir, fname)
@@ -176,11 +176,8 @@ def clean_temp_storage_files():
 async def download_file_stream(url: str, max_size_mb: int = 50) -> io.BytesIO | None:
     session = await get_http_session()
     stream_headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://www.tikwm.com/",
+        "User-Agent": COMMON_HEADERS["User-Agent"],
+        "Referer": "https://www.google.com/",
         "Accept": "*/*",
     }
     try:
@@ -356,11 +353,11 @@ async def generate_system_status_canvas(bot_start_time: float = BOT_START_TIME, 
     ]
 
     c2_data = [
-        ("TikWM / Bypass:", "ONLINE (HD 1080p)", (74, 222, 128)),
+        ("TikTok Pipeline:", "ONLINE (HD 1080p)", (74, 222, 128)),
+        ("Instagram Engine:", "Reels / Post Bypassed", (74, 222, 128)),
         ("YouTube Core:", "Android/TV Bypassed", (74, 222, 128)),
         ("Disk Trống:", f"{free_gb} GB Available", (74, 222, 128) if free_gb > 1.0 else (239, 68, 68)),
-        ("Stream Pipeline:", "Direct Ram Buffer", (74, 222, 128)),
-        ("DRM Engine:", "Cipher Unpack Online", (74, 222, 128)),
+        ("Stream Pipeline:", "Direct RAM Buffer", (74, 222, 128)),
         ("Auto Cleaner:", "Zero-Disk Waste Engine", (226, 232, 240)),
     ]
 
@@ -567,6 +564,112 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
                     pass
 
     return None, {}
+
+
+# ================= LOGIC INSTAGRAM REELS/POSTS ĐA TẦNG =================
+async def cobalt_insta_download(ig_url: str):
+    """API 1: Cobalt Core Engine cho Instagram."""
+    session = await get_http_session()
+    cobalt_instances = [
+        "https://api.cobalt.tools/api/json",
+        "https://cobalt-api.kwiatekm.tokyo/api/json",
+    ]
+    payload = {
+        "url": ig_url,
+        "vQuality": "max",
+        "filenamePattern": "basic",
+        "isAudioOnly": False,
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": COMMON_HEADERS["User-Agent"],
+    }
+    for endpoint in cobalt_instances:
+        try:
+            async with session.post(
+                endpoint, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=12)
+            ) as resp:
+                if resp.status == 200:
+                    j = await resp.json(content_type=None)
+                    media_url = j.get("url")
+                    picker = j.get("picker", [])
+                    if media_url:
+                        return {
+                            "type": "video",
+                            "url": media_url,
+                            "caption": "Instagram Reel/Video HD",
+                        }
+                    elif picker:
+                        photos = [p.get("url") for p in picker if p.get("type") == "photo"]
+                        if photos:
+                            return {
+                                "type": "album",
+                                "images": photos,
+                                "caption": "Instagram Photo Carousel",
+                            }
+        except Exception as e:
+            logger.warning(f"Cobalt Instagram {endpoint} lỗi: {e}")
+    return None
+
+
+def ytdlp_insta_extract(ig_url: str):
+    """API 2: yt-dlp native trích xuất stream trực tiếp."""
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "no_cache_dir": True,
+    }
+    if COOKIE_FILE_PATH:
+        ydl_opts["cookiefile"] = COOKIE_FILE_PATH
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(ig_url, download=False)
+            if not info:
+                return None
+
+            desc = info.get("description") or info.get("title") or "Instagram Reel"
+            formats = info.get("formats", [])
+            best_v = None
+            for f in reversed(formats):
+                if f.get("url") and f.get("vcodec") != "none":
+                    best_v = f.get("url")
+                    break
+            if not best_v:
+                best_v = info.get("url")
+
+            if best_v:
+                return {
+                    "type": "video",
+                    "url": best_v,
+                    "caption": desc,
+                    "uploader": info.get("uploader", "Instagram Creator"),
+                    "like_count": info.get("like_count", 0),
+                    "comment_count": info.get("comment_count", 0),
+                }
+    except Exception as e:
+        logger.warning(f"yt-dlp instagram lỗi: {e}")
+    return None
+
+
+async def get_instagram_media_data(raw_url: str):
+    """Điều phối trích xuất Instagram Reels/Posts/Stories."""
+    clean_url = raw_url.strip()
+
+    # 1. Cobalt Core Engine
+    res = await cobalt_insta_download(clean_url)
+    if res and (res.get("url") or res.get("images")):
+        return res
+
+    # 2. Fallback bằng yt-dlp
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, ytdlp_insta_extract, clean_url)
+    if res:
+        return res
+
+    return None
 
 
 # ================= LOGIC TIKTOK ĐA TẦNG =================
@@ -877,13 +980,14 @@ def build_welcome_dashboard(user_name: str = "User") -> tuple[str, InlineKeyboar
     display_name = html.escape(user_name)
     panel = (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"┃   {E_SPARKLE} <b>TIKTOK & YOUTUBE TOOLKIT</b> {E_SPARKLE}   ┃\n"
+        f"┃   {E_SPARKLE} <b>ALL-IN-ONE MEDIA TOOLKIT</b> {E_SPARKLE}   ┃\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
         f"👋 <i>Xin chào,</i> <b>{display_name}</b>!\n"
         f"Chào mừng bạn đến với hệ thống bot tiện ích tự động chất lượng cao.\n\n"
         f"╭━━━〔 {E_FIRE} <b>DANH SÁCH TÍNH NĂNG</b> 〕━━━╮\n"
         f"┣ {E_MUSIC} <b>Tải nhạc YouTube:</b> <code>/sing &lt;tên bài&gt;</code>\n"
-        f"┣ 📥 <b>Tải TikTok HD:</b> Gửi link trực tiếp (No logo)\n"
+        f"┣ 📥 <b>Tải TikTok HD:</b> Gửi link TikTok (No watermark)\n"
+        f"┣ 📸 <b>Tải Instagram:</b> Gửi link Reels / Posts trực tiếp\n"
         f"┣ {E_MUSIC} <b>Tách nhạc TikTok:</b> <code>/music &lt;link&gt;</code>\n"
         f"┣ {E_SEARCH} <b>Tra cứu TikTok:</b> <code>/getinfo &lt;user&gt;</code>\n"
         f"┣ 🧹 <b>Dọn rác bộ nhớ:</b> <code>/cleanup</code>\n"
@@ -1498,26 +1602,127 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(report, parse_mode=ParseMode.HTML)
 
 
-# ================= TỰ ĐỘNG TẢI KHI GỬI LINK TIKTOK =================
+# ================= TỰ ĐỘNG BẮT LINK TIKTOK & INSTAGRAM =================
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
 
     text = update.message.text.strip()
+    match = re.search(r"https?://[^\s]+", text)
+    if not match:
+        return
+    raw_url = match.group(0)
 
+    # ------------------ XỬ LÝ INSTAGRAM REELS / POSTS ------------------
+    if "instagram.com" in text or "instagr.am" in text:
+        t0 = time.perf_counter()
+        msg = await update.message.reply_text(
+            f"⏳ <i>Đang bóc tách Instagram Reels không logo...</i>",
+            parse_mode=ParseMode.HTML,
+        )
+
+        data = await get_instagram_media_data(raw_url)
+
+        if not data:
+            await msg.edit_text(
+                f"{E_ALERT} <b>Tải thất bại:</b> Video/Reel riêng tư, link hết hạn hoặc Instagram chặn truy cập.\n{get_speed_tag(t0)}",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        desc = html.escape(data.get("caption") or "Instagram Media")
+        uploader = html.escape(str(data.get("uploader") or "Instagram User"))
+        likes = data.get("like_count") or 0
+        speed_line = get_speed_tag(t0)
+
+        caption = (
+            f"╭━━━〔 📸 <b>INSTAGRAM HD DOWNLOAD</b> 〕━━━╮\n"
+            f"┃ {E_PIN} <b>Nội dung:</b> {truncate_text(desc, 120)}\n"
+            f"┃ 👤 <b>Tác giả:</b> {uploader}\n"
+            f"┃ {E_VERIFIED} <b>Chất lượng:</b> Gốc Full HD (No Watermark)\n"
+            f"┃ {E_HEART} <b>Lượt thích:</b> <code>{likes:,}</code>\n"
+            f"┃{speed_line}\n"
+            f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+        )
+        caption_clean = truncate_text(caption, 1020)
+
+        # Xử lý Album ảnh Instagram
+        if data.get("type") == "album" and data.get("images"):
+            await msg.delete()
+            all_images = data["images"]
+            for i in range(0, len(all_images), 10):
+                batch = all_images[i : i + 10]
+                media = [InputMediaPhoto(media=ensure_full_url(img)) for img in batch]
+                await update.message.reply_media_group(media=media)
+            await update.message.reply_text(caption_clean, parse_mode=ParseMode.HTML)
+            return
+
+        # Xử lý Video Reels
+        media_url = ensure_full_url(data.get("url"))
+        stream_video = await download_file_stream(media_url, max_size_mb=48)
+
+        # Fallback lưu tạm nếu tải stream bộ nhớ thất bại
+        if not stream_video:
+            def _ytdlp_ig_dl(u):
+                tmp = tempfile.gettempdir()
+                out_path = os.path.join(tmp, f"ig_{int(time.time())}.mp4")
+                opts = {
+                    "format": "best",
+                    "outtmpl": out_path,
+                    "quiet": True,
+                    "no_warnings": True,
+                }
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([u])
+                if os.path.exists(out_path):
+                    with open(out_path, "rb") as f:
+                        b = io.BytesIO(f.read())
+                    b.seek(0)
+                    b.name = "instagram.mp4"
+                    os.remove(out_path)
+                    return b
+                return None
+
+            loop = asyncio.get_running_loop()
+            stream_video = await loop.run_in_executor(None, _ytdlp_ig_dl, raw_url)
+
+        await msg.delete()
+
+        if stream_video:
+            try:
+                await update.message.reply_video(
+                    video=stream_video,
+                    caption=caption_clean,
+                    parse_mode=ParseMode.HTML,
+                    supports_streaming=True,
+                    read_timeout=90,
+                    write_timeout=90,
+                )
+            except Exception as e:
+                logger.error(f"Lỗi gửi Instagram video: {e}")
+                await update.message.reply_text(
+                    f"{E_ALERT} Lỗi khi upload video lên Telegram: {e}\n{get_speed_tag(t0)}",
+                    parse_mode=ParseMode.HTML,
+                )
+        else:
+            await update.message.reply_text(
+                f"{E_ALERT} Dung lượng video vượt quá 50MB hoặc Instagram chặn IP.\n{get_speed_tag(t0)}",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    # ------------------ XỬ LÝ TIKTOK ------------------
     if "tiktok.com" in text or "douyin.com" in text:
         t0 = time.perf_counter()
-        match = re.search(r"https?://[^\s]+", text)
-        if not match:
-            return
-        raw_url = match.group(0)
-
-        msg = await update.message.reply_text("⏳ <i>Đang bóc tách video HD từ server...</i>", parse_mode=ParseMode.HTML)
+        msg = await update.message.reply_text(f"⏳ <i>Đang bóc tách video HD từ server...</i>", parse_mode=ParseMode.HTML)
 
         data = await get_tiktok_universal_data(raw_url)
 
         if not data or not data.get("data"):
-            await msg.edit_text(f"{E_ALERT} <b>Tải thất bại:</b> Video riêng tư, bị xoá hoặc link không hỗ trợ.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
+            await msg.edit_text(
+                f"{E_ALERT} <b>Tải thất bại:</b> Video riêng tư, bị xoá hoặc link không hỗ trợ.\n{get_speed_tag(t0)}",
+                parse_mode=ParseMode.HTML,
+            )
             return
 
         res = data["data"]
@@ -1571,8 +1776,10 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await msg.edit_text(f"{E_ALERT} Không trích xuất được link tải video.\n{get_speed_tag(t0)}", parse_mode=ParseMode.HTML)
             return
 
+        # Tải file về buffer RAM để Telegram gửi đi
         stream_video = await download_file_stream(video_url, max_size_mb=48)
 
+        # Fallback bằng yt-dlp nếu CDN bị chặn
         if not stream_video:
             def _ytdlp_direct_dl(u):
                 tmp = tempfile.gettempdir()
@@ -1624,7 +1831,7 @@ def main():
         "╔══════════════════════════════════════════════════════╗\n"
         "║            MULTI-PLATFORM TOOLKIT ONLINE             ║\n"
         "║        Railway Engine • Python Telegram v20+         ║\n"
-        "║ Features: Custom Emojis + TikTok HD + Music Pipeline ║\n"
+        "║ Features: Custom Emojis + TikTok + IG Reels + Music  ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
     print(terminal_banner)
@@ -1647,7 +1854,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
     app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
 
-    # Messages
+    # Messages (Tự động bắt link TikTok / Instagram)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
     app.run_polling()
