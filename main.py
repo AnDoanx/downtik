@@ -26,7 +26,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
-from telegram.error import BadRequest, TelegramError
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -50,14 +50,12 @@ E_PIN     = '<tg-emoji emoji-id="6271271702408204490">📌</tg-emoji>'
 E_SEARCH  = '<tg-emoji emoji-id="6260215820933144560">🔍</tg-emoji>'
 E_ALERT   = '<tg-emoji emoji-id="6269253325477123346">⚠️</tg-emoji>'
 
-# ================= CẤU HÌNH TOKEN & API =================
+# ================= CẤU HÌNH TOKEN & HỆ THỐNG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8949220582:AAE6zt_01TePivwodfw7dVmSWn0prRCvFw8").strip()
 ALLOWED_USERS = []
 
-# Tắt log token của httpx
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# Cookies cấu hình cho yt-dlp
 YT_COOKIES_ENV = os.getenv("YT_COOKIES", "").strip()
 COOKIE_FILE_PATH = None
 
@@ -72,20 +70,19 @@ if YT_COOKIES_ENV:
             with open(cookie_tmp, "w", encoding="utf-8") as f:
                 f.write(YT_COOKIES_ENV)
         COOKIE_FILE_PATH = cookie_tmp
-        logging.info("Đã nạp thành công cookies từ biến môi trường.")
+        logging.info("Đã nạp cookies thành công.")
     except Exception as e:
         logging.warning(f"Không thể tạo file cookie: {e}")
 
 TIKWM_BASE = "https://www.tikwm.com/api/"
 TIK_INFO_API = "https://ksjdjdmfmxm.x10.mx/tik1.php?user="
 
-# Banner Images
 IMG_WELCOME = "https://cdn.phototourl.com/free/2026-09-20-707fd5ce-5572-4eb5-a904-e3f6002bcbdf.jpg"
-IMG_MUSIC = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
+IMG_MUSIC   = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
 IMG_GETINFO = "https://cdn.phototourl.com/free/2026-09-20-c38e193c-d60a-418e-8b23-c2e122c5a350.jpg"
-IMG_DOWN = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png"
-IMG_SING = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
-IMG_DONATE = "https://cdn.upanhlaylink.com/i/bhMtLMHZ.jpeg"
+IMG_DOWN    = "https://cdn.phototourl.com/free/2026-09-20-8f7cee5e-79ee-4e36-8bd6-1eb5d315635e.png"
+IMG_SING    = "https://cdn.phototourl.com/free/2026-09-20-df9907e7-6ec8-424b-9d69-69b26659cb3b.jpg"
+IMG_DONATE  = "https://cdn.upanhlaylink.com/i/bhMtLMHZ.jpeg"
 
 COMMON_HEADERS = {
     "User-Agent": (
@@ -104,9 +101,8 @@ logger = logging.getLogger("MultiToolBot")
 HTTP_SESSION: aiohttp.ClientSession | None = None
 
 
-# ================= CÁC HÀM XỬ LÝ AN TOÀN TRÁNH CRASH =================
+# ================= HÀM HỖ TRỢ TRÁNH CRASH MESSAGE =================
 async def safe_delete(msg):
-    """Xóa tin nhắn an toàn, không ném ngoại lệ nếu tin nhắn không còn tồn tại."""
     if not msg:
         return
     try:
@@ -116,23 +112,25 @@ async def safe_delete(msg):
 
 
 async def safe_edit_text(msg, text: str, **kwargs):
-    """Sửa tin nhắn an toàn, phòng ngừa lỗi 'Message to edit not found'."""
     if not msg:
         return None
     try:
         return await msg.edit_text(text, **kwargs)
     except BadRequest as e:
-        err_str = str(e).lower()
-        if "message to edit not found" in err_str:
+        err = str(e).lower()
+        if "message to edit not found" in err:
             try:
                 return await msg.chat.send_message(text, **kwargs)
             except Exception:
                 return None
-        if "message is not modified" in err_str:
+        if "message is not modified" in err:
             return msg
-        logger.warning(f"Lỗi safe_edit_text: {e}")
+        if "can't parse entities" in err:
+            clean_text = re.sub(r"<[^>]+>", "", text)
+            return await msg.chat.send_message(clean_text)
+        logger.warning(f"safe_edit_text BadRequest: {e}")
     except Exception as e:
-        logger.warning(f"Lỗi ngoại lệ safe_edit_text: {e}")
+        logger.warning(f"safe_edit_text error: {e}")
     return None
 
 
@@ -159,7 +157,7 @@ async def close_http_session(application: Application = None):
     global HTTP_SESSION
     if HTTP_SESSION and not HTTP_SESSION.closed:
         await HTTP_SESSION.close()
-        logger.info("Đã đóng an toàn kết nối aiohttp session.")
+        logger.info("Đã đóng kết nối aiohttp session.")
 
 
 def get_speed_tag(start_time: float) -> str:
@@ -189,7 +187,7 @@ def ensure_full_url(url: str) -> str:
     return url
 
 
-# ================= HÀM DỌN RÁC Ổ CỨNG VÀ BỘ NHỚ =================
+# ================= DỌN DẸP BỘ NHỚ VÀ ĐĨA =================
 def clean_temp_storage_files():
     tmp_dir = tempfile.gettempdir()
     deleted_count = 0
@@ -209,11 +207,11 @@ def clean_temp_storage_files():
                 except Exception:
                     pass
     except Exception as e:
-        logger.warning(f"Lỗi dọn dẹp file tạm: {e}")
+        logger.warning(f"Lỗi dọn file tạm: {e}")
     return deleted_count, freed_bytes
 
 
-# ================= HỖ TRỢ STREAM BUFFER =================
+# ================= STREAM BUFFER TẢI FILE =================
 async def download_file_stream(url: str, max_size_mb: int = 50, filename: str = "media.mp4") -> io.BytesIO | None:
     session = await get_http_session()
     stream_headers = {
@@ -245,7 +243,7 @@ async def download_file_stream(url: str, max_size_mb: int = 50, filename: str = 
             else:
                 logger.warning(f"CDN từ chối kết nối (HTTP {resp.status}): {url}")
     except Exception as e:
-        logger.error(f"Lỗi tải stream media: {e}")
+        logger.error(f"Lỗi tải stream: {e}")
     return None
 
 
@@ -530,7 +528,7 @@ async def search_youtube_fast(keyword: str, max_results: int = 6) -> list[dict]:
         return []
 
 
-# ================= TẢI AUDIO YOUTUBE TỐI ƯU =================
+# ================= TẢI AUDIO YOUTUBE =================
 def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tuple[io.BytesIO | None, dict]:
     clean_temp_storage_files()
 
@@ -607,7 +605,7 @@ def extract_youtube_audio_advanced(video_id: str, search_query: str = "") -> tup
     return None, {}
 
 
-# ================= LOGIC INSTAGRAM REELS/POSTS ĐA TẦNG =================
+# ================= LOGIC INSTAGRAM REELS / POSTS =================
 async def cobalt_insta_download(ig_url: str):
     session = await get_http_session()
     cobalt_instances = [
@@ -696,12 +694,10 @@ def ytdlp_insta_extract(ig_url: str):
 async def get_instagram_media_data(raw_url: str):
     clean_url = raw_url.strip()
 
-    # 1. Cobalt Core Engine
     res = await cobalt_insta_download(clean_url)
     if res and (res.get("url") or res.get("images")):
         return res
 
-    # 2. Fallback bằng yt-dlp
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, ytdlp_insta_extract, clean_url)
     if res:
@@ -710,7 +706,7 @@ async def get_instagram_media_data(raw_url: str):
     return None
 
 
-# ================= LOGIC TIKTOK ĐA TẦNG =================
+# ================= LOGIC TIKTOK =================
 async def resolve_tiktok_url(url: str) -> str:
     session = await get_http_session()
     clean = url.strip()
@@ -899,22 +895,18 @@ def ytdlp_tiktok_extract(url: str):
 async def get_tiktok_universal_data(raw_url: str):
     clean_url = await resolve_tiktok_url(raw_url)
 
-    # 1. TikWM
     res = await tikwm_req({"url": clean_url, "hd": 1})
     if res and res.get("data") and (res["data"].get("play") or res["data"].get("images")):
         return res
 
-    # 2. Cobalt
     res = await cobalt_tik_download(clean_url)
     if res and res.get("data") and res["data"].get("play"):
         return res
 
-    # 3. LoveTik
     res = await lovetik_fallback_download(clean_url)
     if res and res.get("data") and (res["data"].get("play") or res["data"].get("images")):
         return res
 
-    # 4. yt-dlp native fallback
     loop = asyncio.get_running_loop()
     res = await loop.run_in_executor(None, ytdlp_tiktok_extract, clean_url)
     if res and res.get("data"):
@@ -927,7 +919,6 @@ async def fetch_tiktok_user_info(username: str) -> dict:
     session = await get_http_session()
     clean_user = username.strip().lstrip("@")
 
-    # Ưu tiên 1: TikWM User Info API (chuẩn và nhanh nhất)
     try:
         tikwm_url = f"https://www.tikwm.com/api/user/info?unique_id={clean_user}"
         async with session.get(tikwm_url, timeout=aiohttp.ClientTimeout(total=7)) as resp:
@@ -938,7 +929,6 @@ async def fetch_tiktok_user_info(username: str) -> dict:
     except Exception as e:
         logger.warning(f"TikWM user fetch fail: {e}")
 
-    # Ưu tiên 2: API phụ
     url = f"{TIK_INFO_API}{clean_user}"
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=7)) as resp:
@@ -993,7 +983,11 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
     is_verified = u.get("verified") or u.get("customVerify") or False
     verified_str = f"{E_VERIFIED} Đã xác minh" if is_verified else f"{E_ALERT} Chưa xác minh"
     language = html.escape(str(u.get("language") or u.get("region") or "vi").lower())
-    bio = html.escape(str(u.get("signature") or u.get("bio") or "Không có tiểu sử."))
+    
+    raw_bio = str(u.get("signature") or u.get("bio") or "Không có tiểu sử.")
+    short_bio = raw_bio[:120] + ("..." if len(raw_bio) > 120 else "")
+    bio = html.escape(short_bio)
+    
     has_shop = u.get("commerceUserInfo", {}).get("commerceUser") or u.get("is_star") or False
     shop_str = f"{E_VERIFIED} Có gian hàng" if has_shop else "❌ Không có"
 
@@ -1009,19 +1003,19 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
         f"╭━━━〔 {E_SPARKLE} <b>TIKTOK PROFILE STATS</b> 〕━━━╮\n"
         f"┃\n"
         f"┣ {E_PIN} <b>Tên hiển thị:</b> <b>{nickname}</b>\n"
-        f"┣ {E_BOLT} <b>ID người dùng:</b> <code>{uid}</code>\n"
+        f"┣ {E_BOLT} <b>ID:</b> <code>{uid}</code>\n"
         f"┣ {E_SPARKLE} <b>Trạng thái:</b> {status_str}\n"
         f"┣ {E_VERIFIED} <b>Huy hiệu:</b> {verified_str}\n"
         f"┣ {E_FIRE} <b>Cửa hàng:</b> {shop_str}\n"
         f"┣ 🌐 <b>Khu vực:</b> <code>{language.upper()}</code>\n"
         f"┃\n"
-        f"┣ 📊 <b>Số liệu tương tác:</b>\n"
+        f"┣ 📊 <b>Tương tác:</b>\n"
         f"┃ ├ 👥 Follower: <code>{followers:,}</code>\n"
         f"┃ ├ 👤 Following: <code>{following:,}</code>\n"
         f"┃ ├ 🎥 Video: <code>{videos:,}</code> clips\n"
-        f"┃ └ {E_HEART} Yêu thích: <code>{hearts:,}</code> likes\n"
+        f"┃ └ {E_HEART} Likes: <code>{hearts:,}</code>\n"
         f"┃\n"
-        f"┣ ⏰ <b>Thời gian tạo:</b> <code>{created_time_str}</code>\n"
+        f"┣ ⏰ <b>Ngày tạo:</b> <code>{created_time_str}</code>\n"
         f"┣ {E_PIN} <b>Tiểu sử:</b>\n"
         f"┃ <i>« {bio} »</i>\n"
         f"┃\n"
@@ -1029,7 +1023,7 @@ def format_user_info_panel(data: dict, username: str) -> tuple[str, str | None]:
         f"👉 <b>Xem trang:</b> <a href='https://www.tiktok.com/@{unique_id}'>tiktok.com/@{unique_id}</a>"
     )
 
-    return truncate_text(panel, 1020), avatar
+    return panel, avatar
 
 
 # ================= DASHBOARD WELCOME =================
@@ -1655,12 +1649,23 @@ async def cmd_getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_to_send = avatar or IMG_GETINFO
         try:
             await update.message.reply_photo(photo=photo_to_send, caption=report, parse_mode=ParseMode.HTML)
+        except BadRequest as e:
+            if "can't parse entities" in str(e).lower():
+                clean_report = re.sub(r"<[^>]+>", "", report)
+                await update.message.reply_photo(photo=photo_to_send, caption=clean_report)
+            else:
+                raise e
         except Exception:
-            await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+            try:
+                await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+            except Exception:
+                clean_report = re.sub(r"<[^>]+>", "", report)
+                await update.message.reply_text(clean_report)
+
     except Exception as e:
         logger.error(f"Lỗi getinfo: {e}")
         await safe_delete(status_msg)
-        await update.message.reply_text(f"{E_ALERT} Không thể hoàn tất tra cứu: {e}", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"{E_ALERT} Không thể hoàn tất tra cứu: {e}")
 
 
 # ================= TỰ ĐỘNG BẮT LINK TIKTOK & INSTAGRAM =================
@@ -1674,7 +1679,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     raw_url = match.group(0)
 
-    # ------------------ XỬ LÝ INSTAGRAM REELS / POSTS ------------------
+    # ------------------ INSTAGRAM ------------------
     if "instagram.com" in text or "instagr.am" in text:
         t0 = time.perf_counter()
         msg = await update.message.reply_text(
@@ -1708,7 +1713,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         caption_clean = truncate_text(caption, 1020)
 
-        # Xử lý Album ảnh Instagram
         if data.get("type") == "album" and data.get("images"):
             await safe_delete(msg)
             all_images = data["images"]
@@ -1719,11 +1723,9 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(caption_clean, parse_mode=ParseMode.HTML)
             return
 
-        # Xử lý Video Reels: Ép tên file .mp4
         media_url = ensure_full_url(data.get("url"))
         stream_video = await download_file_stream(media_url, max_size_mb=48, filename="instagram.mp4")
 
-        # Fallback bằng yt-dlp ép định dạng AVC1/MP4 tương thích Telegram
         if not stream_video:
             def _ytdlp_ig_dl(u):
                 tmp = tempfile.gettempdir()
@@ -1777,7 +1779,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         return
 
-    # ------------------ XỬ LÝ TIKTOK ------------------
+    # ------------------ TIKTOK ------------------
     if "tiktok.com" in text or "douyin.com" in text:
         t0 = time.perf_counter()
         msg = await update.message.reply_text(f"⏳ <i>Đang bóc tách video HD từ server...</i>", parse_mode=ParseMode.HTML)
@@ -1818,7 +1820,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             keyboard.append([InlineKeyboardButton("🎵 Tải nhạc MP3 của video", callback_data=f"dlmusic_{video_id}")])
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
-        # Bài đăng Album Slide
         if res.get("images"):
             await safe_delete(msg)
             all_images = res["images"]
@@ -1844,7 +1845,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         stream_video = await download_file_stream(video_url, max_size_mb=48, filename="tiktok.mp4")
 
-        # Fallback bằng yt-dlp nếu CDN bị chặn
         if not stream_video:
             def _ytdlp_direct_dl(u):
                 tmp = tempfile.gettempdir()
@@ -1922,7 +1922,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_download_music_callback, pattern="^dlmusic_"))
     app.add_handler(CallbackQueryHandler(handle_panel_callbacks, pattern="^panel_"))
 
-    # Messages (Tự động bắt link TikTok / Instagram)
+    # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
 
     app.run_polling()
